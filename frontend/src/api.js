@@ -142,3 +142,18 @@ export async function fetchRouteFromGraphHopper(startLat, startLng, endLat, endL
 
     throw new Error(`All CORS proxies failed for routing. Last error: ${lastError ? lastError.message : 'Unknown error'}`);
 }
+
+// ========= ML RECOMMENDATIONS =========
+export async function fetchRestaurantRecommendations(lat, lng) {
+    try {
+        const response = await fetch(`http://localhost:5000/recommend?lat=${lat}&lng=${lng}`);
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        return data;
+    } catch (err) {
+        console.error('Failed to fetch restaurant recommendations:', err);
+        return null;
+    }
+}

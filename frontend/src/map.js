@@ -1,4 +1,4 @@
-import { fetchChargingStations, fetchRouteFromGraphHopper } from './api.js';
+import { fetchChargingStations, fetchRouteFromGraphHopper, fetchRestaurantRecommendations } from './api.js';
 import { getDatabase } from './auth.js';
 
 // ========= MAP STATE =========
@@ -9,8 +9,23 @@ export let firebaseLocationMarker = null;
 export let rangeCircle = null;
 export let stationMarkers = [];
 export let currentRoute = null;
+export let userLocationWatchId = null;
+let isFirstLocationFind = true;
+export let recommendedStations = new Set(); // Tracks stations we already requested KNN for
 
 // ========= UTILITY =========
+export function calculateDistanceMiles(lat1, lon1, lat2, lon2) {
+    const R = 3958.8; // Earth radius in miles
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+        Math.sin(dLat/2) * Math.sin(dLat/2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+        Math.sin(dLon/2) * Math.sin(dLon/2); 
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
+    return R * c; 
+}
+
 export function escapeHtml(str) {
     if (!str) return '';
     return String(str)
@@ -71,38 +86,147 @@ export function locateUser(fallbackLocation) {
         return;
     }
 
-    navigator.geolocation.getCurrentPosition(
+    // Clear any existing watch before starting a new one
+    if (userLocationWatchId !== null) {
+        navigator.geolocation.clearWatch(userLocationWatchId);
+    }
+
+    userLocationWatchId = navigator.geolocation.watchPosition(
         (position) => {
             const coords = {
                 lat: position.coords.latitude,
                 lng: position.coords.longitude
             };
-            statusMessage('Location found. Tap the button to calculate reachable range.', 'success');
+            statusMessage('Live location tracking active.', 'success');
             setUserLocation(coords);
         },
         (error) => {
             console.warn('Geolocation error:', error);
-            statusMessage('Unable to access your location. Using default city.', 'error');
+            statusMessage('Unable to access live location. Using default city.', 'error');
             setUserLocation(fallbackLocation);
         },
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 300000 }
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
     );
 }
 
 export function setUserLocation(coords) {
     if (!mapInitialized) return;
     const latLng = [coords.lat, coords.lng];
-    map.setView(latLng, 12);
+    
+    // Only recenter the map on the very first location fix
+    if (isFirstLocationFind) {
+        map.setView(latLng, 14); // Zoom in closer for driving context
+        isFirstLocationFind = false;
+    }
 
-    if (userMarker) userMarker.remove();
+    // Update existing marker instead of deleting/recreating to avoid flickering
+    if (userMarker) {
+        userMarker.setLatLng(latLng);
+    } else {
+        userMarker = L.circleMarker(latLng, {
+            radius: 8,
+            fillColor: '#3b82f6',
+            fillOpacity: 1,
+            color: '#ffffff',
+            weight: 3
+        }).addTo(map).bindTooltip('Your Location', { direction: 'top' });
+    }
 
-    userMarker = L.circleMarker(latLng, {
-        radius: 8,
-        fillColor: '#3b82f6',
-        fillOpacity: 1,
-        color: '#ffffff',
-        weight: 3
-    }).addTo(map).bindTooltip('Your Location', { direction: 'top' });
+    // Trigger KNN check when location updates
+    checkProximityForRecommendations(coords.lat, coords.lng);
+}
+
+// ========= RECOMMENDATIONS LOGIC =========
+function showRecommendations(recs, stationName) {
+    const area = document.getElementById('recommendationsArea');
+    const list = document.getElementById('recommendationsList');
+    if (!area || !list) return;
+
+    list.innerHTML = '';
+    
+    const info = document.createElement('div');
+    info.style.fontSize = '0.75rem';
+    info.style.color = '#94a3b8';
+    info.style.marginBottom = '0.5rem';
+    info.innerHTML = `Near <strong>${escapeHtml(stationName)}</strong>`;
+    list.appendChild(info);
+
+    if (recs.length === 0) {
+        list.innerHTML += '<div style="color: #94a3b8; font-size: 0.8rem;">No AI recommendations found.</div>';
+    } else {
+        recs.forEach(rec => {
+            const item = document.createElement('div');
+            item.style.background = 'rgba(255,255,255,0.05)';
+            item.style.border = '1px solid rgba(255,255,255,0.1)';
+            item.style.borderRadius = '8px';
+            item.style.padding = '0.5rem 0.75rem';
+            
+            const nameDiv = document.createElement('div');
+            nameDiv.style.fontWeight = '600';
+            nameDiv.style.fontSize = '0.85rem';
+            nameDiv.style.color = '#fff';
+            nameDiv.textContent = rec.name;
+            
+            const metaDiv = document.createElement('div');
+            metaDiv.style.display = 'flex';
+            metaDiv.style.justifyContent = 'space-between';
+            metaDiv.style.marginTop = '0.3rem';
+            metaDiv.style.fontSize = '0.75rem';
+            
+            const ratingSpan = document.createElement('span');
+            ratingSpan.innerHTML = `⭐ ${rec.rating.toFixed(1)}`;
+            ratingSpan.style.color = '#fbbf24';
+            
+            const distSpan = document.createElement('span');
+            // The python model returns abstract coordinate distance, converting to a clean number
+            const distDisp = (rec.distance * 69).toFixed(2); // very rough proxy to miles if it's lat/lng euclidean
+            distSpan.textContent = `~${distDisp} mi`; 
+            distSpan.style.color = '#94a3b8';
+
+            metaDiv.appendChild(ratingSpan);
+            metaDiv.appendChild(distSpan);
+            
+            item.appendChild(nameDiv);
+            item.appendChild(metaDiv);
+            list.appendChild(item);
+        });
+    }
+
+    area.style.display = 'block';
+}
+
+async function checkProximityForRecommendations(userLat, userLng) {
+    const thresholdMiles = 0.5; // Trigger if within half a mile
+
+    // Check OCM stations
+    for (const marker of stationMarkers) {
+        const pos = marker.getLatLng();
+        const dist = calculateDistanceMiles(userLat, userLng, pos.lat, pos.lng);
+        const title = marker.options.title || 'Unknown Station';
+        
+        if (dist <= thresholdMiles && !recommendedStations.has(title)) {
+            recommendedStations.add(title);
+            const recs = await fetchRestaurantRecommendations(pos.lat, pos.lng);
+            if (recs) showRecommendations(recs, title);
+            return; // Show for closest station only
+        }
+    }
+
+    // Check Firebase stations
+    if (window.firebaseStationMarkerMap) {
+        for (const [id, marker] of Object.entries(window.firebaseStationMarkerMap)) {
+            const pos = marker.getLatLng();
+            const dist = calculateDistanceMiles(userLat, userLng, pos.lat, pos.lng);
+            const title = marker.options.title || `Station ${id}`;
+
+            if (dist <= thresholdMiles && !recommendedStations.has(title)) {
+                recommendedStations.add(title);
+                const recs = await fetchRestaurantRecommendations(pos.lat, pos.lng);
+                if (recs) showRecommendations(recs, title);
+                return;
+            }
+        }
+    }
 }
 
 // ========= RANGE CIRCLE =========
