@@ -157,3 +157,38 @@ export async function fetchRestaurantRecommendations(lat, lng) {
         return null;
     }
 }
+
+// ========= PEAK HOURS ANALYSIS =========
+export async function analyzePeakHours(stationId) {
+    try {
+        const response = await fetch(`http://localhost:5000/peak_hours?station_id=${encodeURIComponent(stationId)}`);
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        return data;
+    } catch (err) {
+        console.error('Failed to analyze peak hours:', err);
+        return null;
+    }
+}
+
+export async function registerTimestampInMySQL(stationId, timestamp) {
+    try {
+        const response = await fetch(`http://localhost:5000/register_timestamp`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ station_id: stationId, timestamp: timestamp })
+        });
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        return data;
+    } catch (err) {
+        console.error('Failed to register timestamp:', err);
+        return null;
+    }
+}

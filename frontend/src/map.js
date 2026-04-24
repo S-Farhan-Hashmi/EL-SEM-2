@@ -1,4 +1,4 @@
-import { fetchChargingStations, fetchRouteFromGraphHopper, fetchRestaurantRecommendations } from './api.js';
+import { fetchChargingStations, fetchRouteFromGraphHopper, fetchRestaurantRecommendations, analyzePeakHours, registerTimestampInMySQL } from './api.js';
 import { getDatabase } from './auth.js';
 
 // ========= MAP STATE =========
@@ -152,36 +152,45 @@ function showRecommendations(recs, stationName) {
     list.appendChild(info);
 
     if (recs.length === 0) {
-        list.innerHTML += '<div style="color: #94a3b8; font-size: 0.8rem;">No AI recommendations found.</div>';
+        list.innerHTML += '<div style="color: #94a3b8; font-size: 0.8rem; padding: 0.5rem 0;">No AI recommendations found.</div>';
     } else {
         recs.forEach(rec => {
             const item = document.createElement('div');
-            item.style.background = 'rgba(255,255,255,0.05)';
-            item.style.border = '1px solid rgba(255,255,255,0.1)';
-            item.style.borderRadius = '8px';
-            item.style.padding = '0.5rem 0.75rem';
+            item.style.background = 'rgba(255, 255, 255, 0.08)';
+            item.style.border = '1px solid rgba(255, 255, 255, 0.15)';
+            item.style.borderRadius = '10px';
+            item.style.padding = '12px 14px';
+            item.style.display = 'flex';
+            item.style.flexDirection = 'column';
+            item.style.gap = '8px';
+            item.style.transition = 'transform 0.2s ease, background 0.2s ease';
+            item.onmouseover = () => { item.style.background = 'rgba(255, 255, 255, 0.12)'; item.style.transform = 'translateY(-2px)'; };
+            item.onmouseout = () => { item.style.background = 'rgba(255, 255, 255, 0.08)'; item.style.transform = 'translateY(0)'; };
             
             const nameDiv = document.createElement('div');
             nameDiv.style.fontWeight = '600';
-            nameDiv.style.fontSize = '0.85rem';
-            nameDiv.style.color = '#fff';
+            nameDiv.style.fontSize = '0.95rem';
+            nameDiv.style.color = '#ffffff';
+            nameDiv.style.lineHeight = '1.3';
+            nameDiv.style.wordBreak = 'break-word';
             nameDiv.textContent = rec.name;
             
             const metaDiv = document.createElement('div');
             metaDiv.style.display = 'flex';
             metaDiv.style.justifyContent = 'space-between';
-            metaDiv.style.marginTop = '0.3rem';
-            metaDiv.style.fontSize = '0.75rem';
+            metaDiv.style.alignItems = 'center';
+            metaDiv.style.fontSize = '0.8rem';
             
             const ratingSpan = document.createElement('span');
-            ratingSpan.innerHTML = `⭐ ${rec.rating.toFixed(1)}`;
-            ratingSpan.style.color = '#fbbf24';
+            ratingSpan.innerHTML = `⭐ <strong style="color: #fcd34d;">${rec.rating.toFixed(1)}</strong>`;
+            ratingSpan.style.background = 'rgba(0,0,0,0.3)';
+            ratingSpan.style.padding = '2px 6px';
+            ratingSpan.style.borderRadius = '4px';
             
             const distSpan = document.createElement('span');
-            // The python model returns abstract coordinate distance, converting to a clean number
-            const distDisp = (rec.distance * 69).toFixed(2); // very rough proxy to miles if it's lat/lng euclidean
-            distSpan.textContent = `~${distDisp} mi`; 
-            distSpan.style.color = '#94a3b8';
+            const distDisp = (rec.distance * 69).toFixed(2);
+            distSpan.innerHTML = `<span style="opacity:0.7;">📍</span> ~${distDisp} mi`; 
+            distSpan.style.color = '#cbd5e1';
 
             metaDiv.appendChild(ratingSpan);
             metaDiv.appendChild(distSpan);
@@ -196,7 +205,7 @@ function showRecommendations(recs, stationName) {
 }
 
 async function checkProximityForRecommendations(userLat, userLng) {
-    const thresholdMiles = 0.5; // Trigger if within half a mile
+    const thresholdMiles = 0.05; // Trigger if within 0.05 miles (approx 260 feet)
 
     // Check OCM stations
     for (const marker of stationMarkers) {
@@ -327,15 +336,59 @@ export function addStationMarkers(stations) {
           </button>
         </div>
         <div id="routeInfo-${station.ID}" style="margin-top: 0.5rem; font-size: 0.75rem; color: #4b5563; display: none;"></div>
+        <div style="margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid #e5e7eb;">
+          <div style="font-size: 0.8rem; font-weight: 600; color: #1f2937; margin-bottom: 0.3rem;">MySQL Peak Hours Test</div>
+          <button id="simEntryBtn-ocm-${station.ID}" style="
+            background: #4f46e5; color: white; border: none; border-radius: 4px;
+            padding: 0.3rem 0.6rem; font-size: 0.75rem; cursor: pointer; width: 100%; margin-bottom: 0.3rem; transition: background 0.2s;
+          " onmouseover="this.style.background='#4338ca'" onmouseout="this.style.background='#4f46e5'">
+            🚗 Simulate Entry (Now)
+          </button>
+          <div id="peakInfo-ocm-${station.ID}" style="font-size: 0.75rem; color: #4b5563; min-height: 1.2rem;">Click to register timestamp.</div>
+        </div>
       </div>
     `;
 
         marker.bindPopup(infoHtml);
 
-        marker.on('popupopen', () => {
+        marker.on('popupopen', async () => {
             const routeBtn = document.getElementById(`routeBtn-${station.ID}`);
             if (routeBtn) {
                 routeBtn.addEventListener('click', () => calculateRouteToStation(station, marker));
+            }
+            
+            const simBtn = document.getElementById(`simEntryBtn-ocm-${station.ID}`);
+            const peakInfo = document.getElementById(`peakInfo-ocm-${station.ID}`);
+            if (simBtn && peakInfo) {
+                peakInfo.innerHTML = "Loading...";
+                const stationStrId = `ocm-${station.ID}`;
+                const initialData = await analyzePeakHours(stationStrId);
+                if (initialData && initialData.peak_hours && initialData.peak_hours.length > 0) {
+                    peakInfo.innerHTML = `Peak hours: <strong>${initialData.peak_hours.join(', ')}</strong>`;
+                } else {
+                    peakInfo.innerHTML = "No entries yet.";
+                }
+
+                simBtn.addEventListener('click', async () => {
+                    const nowISO = new Date().toISOString();
+                    simBtn.disabled = true;
+                    simBtn.innerText = "Registering...";
+                    
+                    const res = await registerTimestampInMySQL(stationStrId, nowISO);
+                    if (res && res.success) {
+                        const updatedData = await analyzePeakHours(stationStrId);
+                        if (updatedData && updatedData.peak_hours && updatedData.peak_hours.length > 0) {
+                            peakInfo.innerHTML = `Peak hours: <strong>${updatedData.peak_hours.join(', ')}</strong>`;
+                        } else {
+                            peakInfo.innerHTML = "Error fetching updated data.";
+                        }
+                    } else {
+                        peakInfo.innerHTML = "<span style='color:red;'>Failed to register</span>";
+                    }
+                    
+                    simBtn.disabled = false;
+                    simBtn.innerText = "🚗 Simulate Entry (Now)";
+                });
             }
         });
 
@@ -507,6 +560,16 @@ function createStationPopup(station, stationId) {
         </button>
       </div>
       <div id="routeInfo-firebase-${stationId}" style="margin-top: 0.5rem; font-size: 0.75rem; color: #4b5563; display: none;"></div>
+      <div style="margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid #e5e7eb;">
+        <div style="font-size: 0.8rem; font-weight: 600; color: #1f2937; margin-bottom: 0.3rem;">MySQL Peak Hours Test</div>
+        <button id="simEntryBtn-${stationId}" style="
+          background: #4f46e5; color: white; border: none; border-radius: 4px;
+          padding: 0.3rem 0.6rem; font-size: 0.75rem; cursor: pointer; width: 100%; margin-bottom: 0.3rem; transition: background 0.2s;
+        " onmouseover="this.style.background='#4338ca'" onmouseout="this.style.background='#4f46e5'">
+          🚗 Simulate Entry (Now)
+        </button>
+        <div id="peakInfo-${stationId}" style="font-size: 0.75rem; color: #4b5563; min-height: 1.2rem;">Click to register timestamp.</div>
+      </div>
     </div>
   `;
 }
@@ -523,6 +586,36 @@ export function createOrUpdateStationMarker(station, stationId, markerMap) {
     const live = station.Live || {};
     const status = live.Status || 'Unknown';
 
+    if (!window.stationPreviousStatus) {
+        window.stationPreviousStatus = {};
+    }
+    
+    const previousStatus = window.stationPreviousStatus[stationId];
+    
+    // Auto-register timestamp if status changed from Available to something else (e.g., Occupied)
+    if (previousStatus === 'Available' && status !== 'Available') {
+        console.log(`Station ${stationId} status changed from Available to ${status}. Auto-registering timestamp...`);
+        const nowISO = new Date().toISOString();
+        registerTimestampInMySQL(stationId, nowISO).then(res => {
+            if (res && res.success) {
+                console.log(`✓ Auto-registered timestamp for ${stationId}`);
+                // Optional: update the UI if the popup is open
+                const peakInfo = document.getElementById(`peakInfo-${stationId}`);
+                if (peakInfo) {
+                    analyzePeakHours(stationId).then(updatedData => {
+                        if (updatedData && updatedData.peak_hours && updatedData.peak_hours.length > 0) {
+                            peakInfo.innerHTML = `Peak hours: <strong>${updatedData.peak_hours.join(', ')}</strong>`;
+                        }
+                    });
+                }
+            } else {
+                console.error(`Failed to auto-register timestamp for ${stationId}`);
+            }
+        });
+    }
+    
+    window.stationPreviousStatus[stationId] = status;
+
     if (lat == null || lng == null || isNaN(lat) || isNaN(lng)) {
         console.warn(`Station ${stationId} missing or invalid coordinates`);
         return null;
@@ -538,16 +631,54 @@ export function createOrUpdateStationMarker(station, stationId, markerMap) {
 
     let marker = markerMap[stationId];
 
+    const attachListeners = (m) => {
+        m.off('popupopen');
+        m.on('popupopen', async () => {
+            const routeBtn = document.getElementById(`routeBtn-firebase-${stationId}`);
+            if (routeBtn) {
+                routeBtn.addEventListener('click', () => calculateRouteToFirebaseStation(stationId, m));
+            }
+            
+            const simBtn = document.getElementById(`simEntryBtn-${stationId}`);
+            const peakInfo = document.getElementById(`peakInfo-${stationId}`);
+            if (simBtn && peakInfo) {
+                // Fetch initial peak hours
+                peakInfo.innerHTML = "Loading...";
+                const initialData = await analyzePeakHours(stationId);
+                if (initialData && initialData.peak_hours.length > 0) {
+                    peakInfo.innerHTML = `Peak hours: <strong>${initialData.peak_hours.join(', ')}</strong>`;
+                } else {
+                    peakInfo.innerHTML = "No entries yet.";
+                }
+
+                simBtn.addEventListener('click', async () => {
+                    const nowISO = new Date().toISOString();
+                    simBtn.disabled = true;
+                    simBtn.innerText = "Registering...";
+                    
+                    const res = await registerTimestampInMySQL(stationId, nowISO);
+                    if (res && res.success) {
+                        const updatedData = await analyzePeakHours(stationId);
+                        if (updatedData && updatedData.peak_hours.length > 0) {
+                            peakInfo.innerHTML = `Peak hours: <strong>${updatedData.peak_hours.join(', ')}</strong>`;
+                        } else {
+                            peakInfo.innerHTML = "Error fetching updated data.";
+                        }
+                    } else {
+                        peakInfo.innerHTML = "<span style='color:red;'>Failed to register</span>";
+                    }
+                    
+                    simBtn.disabled = false;
+                    simBtn.innerText = "🚗 Simulate Entry (Now)";
+                });
+            }
+        });
+    };
+
     if (marker) {
         marker.setIcon(createStationIcon(status));
         marker.setPopupContent(createStationPopup(station, stationId));
-        marker.off('popupopen');
-        marker.on('popupopen', () => {
-            const routeBtn = document.getElementById(`routeBtn-firebase-${stationId}`);
-            if (routeBtn) {
-                routeBtn.addEventListener('click', () => calculateRouteToFirebaseStation(stationId, marker));
-            }
-        });
+        attachListeners(marker);
         console.log(`✓ Updated marker for station ${stationId} - Status: ${status}`);
     } else {
         marker = L.marker([latNum, lngNum], {
@@ -556,12 +687,7 @@ export function createOrUpdateStationMarker(station, stationId, markerMap) {
         }).addTo(map);
 
         marker.bindPopup(createStationPopup(station, stationId));
-        marker.on('popupopen', () => {
-            const routeBtn = document.getElementById(`routeBtn-firebase-${stationId}`);
-            if (routeBtn) {
-                routeBtn.addEventListener('click', () => calculateRouteToFirebaseStation(stationId, marker));
-            }
-        });
+        attachListeners(marker);
 
         markerMap[stationId] = marker;
         console.log(`✓ Created marker for station ${stationId} - Status: ${status}`);
