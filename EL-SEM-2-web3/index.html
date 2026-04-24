@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>Charge Flow • Intelligent EV Finder</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+
+    <!-- Google Font: Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+        rel="stylesheet" />
+
+    <!-- Leaflet styles -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+
+    <!-- Charge Flow Theme -->
+    <link rel="stylesheet" href="frontend/style.css" />
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+</head>
+
+<body>
+
+    <!-- Full Screen Map -->
+    <div id="map"></div>
+
+    <!-- Vignette Overlay -->
+    <div class="map-overlay"></div>
+
+    <!-- Fixed Sidebar Controls -->
+    <aside class="sidebar-controls">
+        <div class="panel-header">
+            <div class="title-group">
+                <h1>Charge Flow</h1>
+                <p>Intelligent Range AI</p>
+            </div>
+            <span class="badge">Live</span>
+        </div>
+
+        <div class="form-group">
+            <label for="carModel">Select Vehicle</label>
+            <div class="input-container select-wrapper">
+                <select id="carModel">
+                    <option value="301">Audi e-tron SUV (301 mi)</option>
+                    <option value="264">BMW iX (264 mi)</option>
+                    <option value="249">BYD E6 (249 mi)</option>
+                    <option value="281">Hyundai Kona Electric (281 mi)</option>
+                    <option value="292">Jaguar I-Pace (292 mi)</option>
+                    <option value="549">Lexus NZ (549 mi)</option>
+                    <option value="75">Mahindra e2o (75 mi)</option>
+                    <option value="257">Mercedes-Benz EQC (257 mi)</option>
+                    <option value="260">MG ZS EV (260 mi)</option>
+                    <option value="168">MINI Cooper SE (168 mi)</option>
+                    <option value="226">Nissan LEAF (226 mi)</option>
+                    <option value="246">Porsche Taycan (246 mi)</option>
+                    <option value="262">Tesla Model 3 Std (262 mi)</option>
+                    <option value="353">Tesla Model 3 Long (353 mi)</option>
+                    <option value="194">Tata Nexon EV (194 mi)</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="batteryLevel">Battery Status</label>
+            <div class="battery-input-group">
+                <div class="input-container" style="flex: 1;">
+                    <input id="batteryLevel" type="number" min="0" max="100" value="70" placeholder="%" />
+                </div>
+                <span class="suffix">%</span>
+            </div>
+        </div>
+
+        <button id="calculateBtn" class="primary-btn">
+            <span>⚡ Initiate Flow</span>
+        </button>
+
+        <div class="status-area">
+            <div id="status" class="status-msg">
+                Syncing with satellite...
+            </div>
+
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <span class="stat-label">Drivable Range</span>
+                    <span id="rangeInfo" class="stat-value">–</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Nearby Chargers</span>
+                    <span id="stationInfo" class="stat-value">–</span>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Floating Recommendations Panel -->
+    <div class="recs-popup-panel" id="recommendationsArea">
+        <div class="title-group" style="margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: flex-start;">
+            <div>
+                <h2 style="font-size: 1.1rem; color: #fff; margin: 0; font-weight: 800;">Nearby Eateries</h2>
+                <p style="font-size: 0.75rem; color: #38bdf8; margin: 0; margin-top: 0.2rem;">AI picks while you charge</p>
+            </div>
+            <button id="closeRecsBtn" style="background: rgba(255,255,255,0.1); border: none; color: #fff; cursor: pointer; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1rem; transition: background 0.2s;">✕</button>
+        </div>
+        <div id="recommendationsList" class="recs-list" style="display: flex; flex-direction: column; gap: 0.6rem;">
+            <!-- Items will be injected here -->
+        </div>
+    </div>
+
+    <!-- Support Chatbot Widget -->
+    <div class="chat-widget">
+        <!-- Chat Toggle Button -->
+        <button class="chat-toggle-btn" id="chatToggleBtn" aria-label="Open chat support">
+            <svg class="chat-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+            </svg>
+            <svg class="close-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+        </button>
+
+        <!-- Chat Window -->
+        <div class="chat-window" id="chatWindow">
+            <!-- Chat Header -->
+            <div class="chat-header">
+                <div class="chat-header-content">
+                    <div class="bot-avatar">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <rect x="3" y="11" width="18" height="10" rx="2"></rect>
+                            <circle cx="12" cy="5" r="2"></circle>
+                            <path d="M12 7v4"></path>
+                            <line x1="8" y1="16" x2="8" y2="16"></line>
+                            <line x1="16" y1="16" x2="16" y2="16"></line>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3>Charge Flow Support</h3>
+                        <span class="online-status">● Online</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat Body -->
+            <div class="chat-body" id="chatBody">
+                <!-- Messages will be appended here -->
+            </div>
+
+            <!-- Chat Input -->
+            <div class="chat-input-container">
+                <input type="text" class="chat-input" id="chatInput" placeholder="Type a message..." />
+                <button class="chat-send-btn" id="chatSendBtn">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+
+    <!-- App Logic (ES6 Modules) -->
+    <script type="module">
+        import './frontend/src/main.js?v=6';
+    </script>
+
+</body>
+
+</html>
