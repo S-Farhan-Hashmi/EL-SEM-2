@@ -92,16 +92,21 @@
                 </div>
             </div>
         </div>
-        <div class="recommendations-area" id="recommendationsArea" style="display: none; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid rgba(255, 255, 255, 0.1);">
-            <div class="title-group" style="margin-bottom: 0.8rem;">
-                <h2 style="font-size: 1rem; color: #fff; margin: 0;">Nearby Eateries</h2>
-                <p style="font-size: 0.75rem; color: #38bdf8; margin: 0;">AI Recommendations while you charge</p>
-            </div>
-            <div id="recommendationsList" class="recs-list" style="display: flex; flex-direction: column; gap: 0.5rem;">
-                <!-- Items will be injected here -->
-            </div>
-        </div>
     </aside>
+
+    <!-- Floating Recommendations Panel -->
+    <div class="recs-popup-panel" id="recommendationsArea">
+        <div class="title-group" style="margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: flex-start;">
+            <div>
+                <h2 style="font-size: 1.1rem; color: #fff; margin: 0; font-weight: 800;">Nearby Eateries</h2>
+                <p style="font-size: 0.75rem; color: #38bdf8; margin: 0; margin-top: 0.2rem;">AI picks while you charge</p>
+            </div>
+            <button id="closeRecsBtn" style="background: rgba(255,255,255,0.1); border: none; color: #fff; cursor: pointer; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1rem; transition: background 0.2s;">✕</button>
+        </div>
+        <div id="recommendationsList" class="recs-list" style="display: flex; flex-direction: column; gap: 0.6rem;">
+            <!-- Items will be injected here -->
+        </div>
+    </div>
 
     <!-- Support Chatbot Widget -->
     <div class="chat-widget">
@@ -164,7 +169,7 @@
 
     <!-- App Logic (ES6 Modules) -->
     <script type="module">
-        import './src/main.js?v=3';
+        import './src/main.js?v=6';
     </script>
 
 </body>

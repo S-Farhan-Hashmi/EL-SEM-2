@@ -73,8 +73,21 @@ export function initLeafletMap() {
     L.control.attribution({ position: 'bottomright' })
         .addAttribution('Map data © OpenStreetMap contributors');
 
+    // Force size recalculation to prevent "black map" (0 height/width) issues
+    setTimeout(() => {
+        if (map) {
+            map.invalidateSize();
+        }
+    }, 250);
+
+    window.addEventListener('resize', () => {
+        if (map) {
+            map.invalidateSize();
+        }
+    });
+
     mapInitialized = true;
-    statusMessage('OpenStreetMap view ready. Trying to locate you…', 'success');
+    statusMessage('Map view ready. Trying to locate you…', 'success');
     locateUser(defaultLocation);
 }
 
@@ -201,11 +214,11 @@ function showRecommendations(recs, stationName) {
         });
     }
 
-    area.style.display = 'block';
+    area.classList.add('active');
 }
 
 async function checkProximityForRecommendations(userLat, userLng) {
-    const thresholdMiles = 0.05; // Trigger if within 0.05 miles (approx 260 feet)
+    const thresholdMiles = 5;
 
     // Check OCM stations
     for (const marker of stationMarkers) {

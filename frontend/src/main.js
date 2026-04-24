@@ -1,5 +1,5 @@
-import { initializeFirebase, getDatabase } from './auth.js?v=3';
-import { fetchChargingStations, fetchRouteFromGraphHopper } from './api.js?v=3';
+import { initializeFirebase, getDatabase } from './auth.js?v=6';
+import { fetchChargingStations, fetchRouteFromGraphHopper } from './api.js?v=6';
 import {
     loadOpenStreetMapView,
     loadStationsFromFirebase,
@@ -7,7 +7,7 @@ import {
     handleCalculate,
     drawRoute,
     userMarker
-} from './map.js?v=3';
+} from './map.js?v=6';
 
 // ========= CHATBOT CLASS =========
 class Chatbot {
@@ -411,9 +411,9 @@ class Chatbot {
 }
 
 // ========= ENTRY POINT =========
-window.addEventListener('load', () => {
+document.addEventListener('DOMContentLoaded', () => {
+    // Initialize Core Logic
     window.siteStationStatuses = {};
-
     loadOpenStreetMapView();
 
     setTimeout(() => {
@@ -422,12 +422,19 @@ window.addEventListener('load', () => {
             setTimeout(() => loadStationsFromFirebase(), 1500);
         });
     }, 100);
-});
 
-document.addEventListener('DOMContentLoaded', () => {
+    // Initialize UI Elements
     const calculateBtn = document.getElementById('calculateBtn');
     if (calculateBtn) {
         calculateBtn.addEventListener('click', handleCalculate);
+    }
+
+    const closeRecsBtn = document.getElementById('closeRecsBtn');
+    if (closeRecsBtn) {
+        closeRecsBtn.addEventListener('click', () => {
+            const area = document.getElementById('recommendationsArea');
+            if (area) area.classList.remove('active');
+        });
     }
 
     new Chatbot();
