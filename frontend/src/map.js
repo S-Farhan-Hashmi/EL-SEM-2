@@ -126,10 +126,13 @@ export function setUserLocation(coords) {
     if (!mapInitialized) return;
     const latLng = [coords.lat, coords.lng];
     
-    // Only recenter the map on the very first location fix
+    // Only recenter the map on the very first location fix,
+    // BUT only if Firebase hasn't already zoomed to our own stations.
     if (isFirstLocationFind) {
-        map.setView(latLng, 14); // Zoom in closer for driving context
         isFirstLocationFind = false;
+        if (!window.firebaseZoomedToStations) {
+            map.setView(latLng, 14);
+        }
     }
 
     // Update existing marker instead of deleting/recreating to avoid flickering
@@ -524,6 +527,18 @@ export async function handleCalculate() {
         addStationMarkers(stations);
         stationInfoEl.textContent = `${stations.length}`;
         statusMessage(`Found ${stations.length} charging station${stations.length === 1 ? '' : 's'} in range.`, 'success');
+
+        // ===== TERMINAL / CONSOLE LOG =====
+        console.log(`[Initiate Flow] Search coords: lat=${center.lat.toFixed(6)}, lng=${center.lng.toFixed(6)}`);
+        console.log(`[Initiate Flow] OCM stations found: ${stations.length}`);
+        if (window.firebaseStationMarkerMap) {
+            const ownCount = Object.keys(window.firebaseStationMarkerMap).length;
+            console.log(`[Initiate Flow] Own Firebase stations on map: ${ownCount}`);
+            Object.entries(window.firebaseStationMarkerMap).forEach(([id, m]) => {
+                const ll = m.getLatLng();
+                console.log(`  → Station ${id}: lat=${ll.lat.toFixed(6)}, lng=${ll.lng.toFixed(6)}`);
+            });
+        }
 
         // Immediately check proximity for recommendations now that stations are loaded
         if (userMarker) {
