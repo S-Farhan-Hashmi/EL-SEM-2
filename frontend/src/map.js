@@ -571,27 +571,28 @@ function createStationPopup(station, stationId) {
     const uuid = info.UUID || info.uuid;
     const status = live.Status || 'Unknown';
     const statusColor = status === 'Available' ? '#22c55e' : '#ef4444';
+    // New Arduino (Document.txt) marks nodes with Type: 'module' — no relay/solar fields
+    const isModule = station.Type === 'module';
 
     return `
     <div style="font-family: system-ui, -apple-system, sans-serif; max-width: 260px;">
-      <div style="font-size: 0.95rem; font-weight: 600; margin-bottom: 0.3rem; color: #1f2937;">
-        ${escapeHtml(title)}
+      <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 0.3rem;">
+        <div style="font-size: 0.95rem; font-weight: 600; color: #1f2937; flex: 1;">
+          ${escapeHtml(title)}
+        </div>
+        ${isModule ? `<span style="font-size: 0.65rem; font-weight: 700; background: #dbeafe; color: #1d4ed8; border-radius: 4px; padding: 2px 6px; white-space: nowrap;">📡 MONITOR</span>` : ''}
       </div>
       <div style="font-size: 0.8rem; color: #6b7280; margin-bottom: 0.2rem;">
         <strong>Station ID:</strong> ${stationId}
       </div>
       ${uuid ? `<div style="font-size: 0.75rem; color: #9ca3af; margin-bottom: 0.2rem;"><strong>UUID:</strong> ${escapeHtml(uuid)}</div>` : ''}
-      ${live ? `
-        <div style="font-size: 0.8rem; color: #6b7280; margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid #e5e7eb;">
-          <div style="margin-bottom: 0.3rem;">
-            <strong>Status:</strong>
-            <span style="color: ${statusColor}; font-weight: 600;">${escapeHtml(status)}</span>
-          </div>
-          ${live.Distance != null ? `<div><strong>Distance:</strong> ${live.Distance} cm</div>` : ''}
-          ${live.ActiveSource ? `<div><strong>Source:</strong> ${escapeHtml(live.ActiveSource)}</div>` : ''}
-          ${live.RelayState != null ? `<div><strong>Relay:</strong> ${live.RelayState ? 'On' : 'Off'}</div>` : ''}
+      <div style="font-size: 0.8rem; color: #6b7280; margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid #e5e7eb;">
+        <div style="margin-bottom: 0.3rem;">
+          <strong>Status:</strong>
+          <span style="color: ${statusColor}; font-weight: 600;">${escapeHtml(status)}</span>
         </div>
-      ` : ''}
+        ${live.Distance != null ? `<div><strong>Sensor Distance:</strong> ${live.Distance} cm</div>` : ''}
+      </div>
       <div style="margin-top: 0.5rem;">
         <button id="routeBtn-firebase-${stationId}" style="
           background: linear-gradient(135deg, #38bdf8, #22c55e);
@@ -604,7 +605,7 @@ function createStationPopup(station, stationId) {
       </div>
       <div id="routeInfo-firebase-${stationId}" style="margin-top: 0.5rem; font-size: 0.75rem; color: #4b5563; display: none;"></div>
       <div style="margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid #e5e7eb;">
-        <div style="font-size: 0.8rem; font-weight: 600; color: #1f2937; margin-bottom: 0.3rem;">MySQL Peak Hours Test</div>
+        <div style="font-size: 0.8rem; font-weight: 600; color: #1f2937; margin-bottom: 0.3rem;">Peak Hours</div>
         <button id="simEntryBtn-${stationId}" style="
           background: #4f46e5; color: white; border: none; border-radius: 4px;
           padding: 0.3rem 0.6rem; font-size: 0.75rem; cursor: pointer; width: 100%; margin-bottom: 0.3rem; transition: background 0.2s;
@@ -632,17 +633,17 @@ export function createOrUpdateStationMarker(station, stationId, markerMap) {
     if (!window.stationPreviousStatus) {
         window.stationPreviousStatus = {};
     }
-    
+
     const previousStatus = window.stationPreviousStatus[stationId];
-    
-    // Auto-register timestamp if status changed from Available to something else (e.g., Occupied)
-    if (previousStatus === 'Available' && status !== 'Available') {
-        console.log(`Station ${stationId} status changed from Available to ${status}. Auto-registering timestamp...`);
+
+    // New Arduino (Document.txt): no relay. Auto-register timestamp when a car
+    // arrives (Available → Occupied) — the sensor loop still writes Status to Firebase.
+    if (previousStatus === 'Available' && status === 'Occupied') {
+        console.log(`Station ${stationId}: car detected (Available → Occupied). Auto-registering timestamp...`);
         const nowISO = new Date().toISOString();
         registerTimestampInMySQL(stationId, nowISO).then(res => {
             if (res && res.success) {
                 console.log(`✓ Auto-registered timestamp for ${stationId}`);
-                // Optional: update the UI if the popup is open
                 const peakInfo = document.getElementById(`peakInfo-${stationId}`);
                 if (peakInfo) {
                     analyzePeakHours(stationId).then(updatedData => {
@@ -656,7 +657,7 @@ export function createOrUpdateStationMarker(station, stationId, markerMap) {
             }
         });
     }
-    
+
     window.stationPreviousStatus[stationId] = status;
 
     if (lat == null || lng == null || isNaN(lat) || isNaN(lng)) {
