@@ -1,13 +1,12 @@
-import { initializeFirebase, getDatabase } from './auth.js?v=6';
-import { fetchChargingStations, fetchRouteFromGraphHopper } from './api.js?v=6';
+import { initializeFirebase, getDatabase } from './auth.js?v=7';
+import { fetchChargingStations, fetchRouteFromGraphHopper } from './api.js?v=7';
 import {
     loadOpenStreetMapView,
     loadStationsFromFirebase,
-    setupLocationListener,
     handleCalculate,
     drawRoute,
     userMarker
-} from './map.js?v=6';
+} from './map.js?v=7';
 
 // ========= CHATBOT CLASS =========
 class Chatbot {
@@ -418,8 +417,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     setTimeout(() => {
         initializeFirebase((db) => {
-            setTimeout(() => setupLocationListener(), 1000);
-            setTimeout(() => loadStationsFromFirebase(), 1500);
+            // New Arduino (Document.txt) writes directly to /stations/{id}/
+            // No separate location node exists, so setupLocationListener is not needed.
+            setTimeout(() => loadStationsFromFirebase(), 500);
         });
     }, 100);
 
