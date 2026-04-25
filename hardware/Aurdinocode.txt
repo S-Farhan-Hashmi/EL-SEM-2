@@ -1,0 +1,373 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Preferences.h>
+#include <Firebase_ESP_Client.h>
+#include <addons/TokenHelper.h>
+#include <addons/RTDBHelper.h>
+
+/******** HARDCODED SETUP HOTSPOT *********/
+#define SETUP_SSID "OnePlus Nord"
+#define SETUP_PASS "IFrgtDaPassword"
+
+/******** PIN DEFINITIONS *********/
+#define TRIG_PIN 5
+#define ECHO_PIN 18
+#define RELAY_PIN 23  // <-- NEW RELAY PIN
+#define RESET_PIN 0 
+
+/******** GLOBAL OBJECTS *********/
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+Preferences prefs;
+WebServer server(80);
+
+/******** STATE VARIABLES *********/
+bool isConfigured = false;
+unsigned long lastSensorRead = 0;
+unsigned long lastConfigCheck = 0;
+String currentStatus = "Unknown";
+String currentActiveSource = "";
+bool lastRelayState = false;
+
+// Configurable Variables
+String wifi_ssid, wifi_pass;
+String fb_url, fb_key;
+
+// Station Data
+String station_title;
+double station_lat = 0.0;
+double station_lon = 0.0;
+String station_uuid;
+int station_id;
+String root_path;
+
+// Dynamic Config (Synced from Firebase)
+float threshold_cm = 50.0;     // Default 20cm
+int relay_percent = 40;        // Default 40% Solar
+bool enable_occupied_charge = true;
+
+/******** HELPER FUNCTIONS *********/
+String generateUUID() {
+  String uuid = "";
+  for (int i = 0; i < 32; i++) {
+    int r = random(0, 16);
+    if (i == 8 || i == 12 || i == 16 || i == 20) uuid += "-";
+    uuid += String(r, HEX);
+  }
+  return uuid;
+}
+
+long readUltrasonic() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  long duration = pulseIn(ECHO_PIN, HIGH);
+  return (duration * 0.034 / 2.0);
+}
+
+/******** HTML FOR CONFIG PAGE *********/
+const char* html_page = R"rawliteral(
+<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EV Station Setup</title>
+<style>body{font-family:sans-serif;padding:20px;} input{width:100%;margin:5px 0;padding:8px;}</style>
+<script>
+function getLocation() {
+  if (navigator.geolocation) {
+    var options = { enableHighAccuracy: false, timeout: 5000, maximumAge: 0 };
+    navigator.geolocation.getCurrentPosition(showPosition, showError, options);
+  } else { alert("Geolocation not supported."); }
+}
+function showPosition(position) {
+  document.getElementById("lat").value = position.coords.latitude;
+  document.getElementById("lon").value = position.coords.longitude;
+  alert("Location Found!");
+}
+function showError(error) {
+  alert("GPS Error: " + error.message);
+}
+</script>
+</head><body>
+<h2>Configure EV Station</h2>
+<button type="button" onclick="getLocation()" style="background:#4CAF50;color:white;padding:10px;">Get Current GPS Location</button>
+<form action="/save" method="POST">
+  <h3>Target WiFi & Firebase</h3>
+  <label>WiFi SSID:</label><input type="text" name="ssid" value="OnePlus Nord">
+  <label>WiFi Password:</label><input type="password" name="pass" value="IFrgtDaPassword">
+  <label>Firebase API Key:</label><input type="text" name="apikey" value="AIzaSyDAF5cDSgVwUog6mHYSSUCPywS4DF9FkoU">
+  <label>Firebase DB URL:</label><input type="text" name="dburl" value="el-project-e45df-default-rtdb.asia-southeast1.firebasedatabase.app">
+  <h3>Station Details</h3>
+  <input type="text" name="title" placeholder="Station Name" value="My EV Station">
+  <label>Threshold (cm):</label><input type="number" step="0.1" name="thresh" value="20">
+  <label>Solar Relay Percent (%):</label><input type="number" name="rel_per" value="40">
+  <input type="text" id="lat" name="lat" placeholder="Latitude">
+  <input type="text" id="lon" name="lon" placeholder="Longitude">
+  <br><br>
+  <input type="submit" value="Save & Restart" style="background:#008CBA;color:white;padding:10px;">
+</form>
+</body></html>
+)rawliteral";
+
+void handleRoot() {
+  server.send(200, "text/html", html_page);
+}
+
+void handleSave() {
+  if (server.hasArg("ssid")) {
+    String rawURL = server.arg("dburl");
+    rawURL.trim(); 
+    rawURL.replace("https://", ""); 
+    rawURL.replace("http://", "");
+    if (rawURL.endsWith("/")) rawURL.remove(rawURL.length() - 1); 
+
+    prefs.begin("ev_config", false);
+    prefs.putString("ssid", server.arg("ssid"));
+    prefs.putString("pass", server.arg("pass"));
+    prefs.putString("apikey", server.arg("apikey"));
+    prefs.putString("dburl", rawURL); 
+    prefs.putString("title", server.arg("title"));
+    
+    // Save Configs
+    prefs.putFloat("thresh", server.arg("thresh").toFloat());
+    prefs.putInt("rel_per", server.arg("rel_per").toInt());
+    prefs.putDouble("lat", server.arg("lat").toDouble());
+    prefs.putDouble("lon", server.arg("lon").toDouble());
+    
+    if(!prefs.isKey("uuid")) {
+      prefs.putString("uuid", generateUUID());
+      prefs.putInt("id", random(10000, 99999));
+    }
+    
+    prefs.putBool("configured", true);
+    prefs.end();
+    
+    server.send(200, "text/html", "<h1>Saved! Restarting...</h1>");
+    delay(2000);
+    ESP.restart();
+  }
+}
+
+void uploadStaticInfo() {
+  Serial.println("Uploading Static Configuration...");
+  
+  // 1. Structure: /Stations/{ID}/ID
+  Firebase.RTDB.setInt(&fbdo, root_path + "/ID", station_id);
+  
+  // 2. Structure: /Stations/{ID}/Info/
+  String infoPath = root_path + "/Info";
+  Firebase.RTDB.setString(&fbdo, infoPath + "/UUID", station_uuid);
+  Firebase.RTDB.setString(&fbdo, infoPath + "/Title", station_title);
+  Firebase.RTDB.setDouble(&fbdo, infoPath + "/Latitude", station_lat);
+  Firebase.RTDB.setDouble(&fbdo, infoPath + "/Longitude", station_lon);
+
+  // 3. Structure: /Stations/{ID}/Config/ (Initial Upload)
+  String configPath = root_path + "/Config";
+  Firebase.RTDB.setFloat(&fbdo, configPath + "/ThresholdCM", threshold_cm);
+  Firebase.RTDB.setInt(&fbdo, configPath + "/RelayPercent", relay_percent);
+  Firebase.RTDB.setBool(&fbdo, configPath + "/EnableOccupiedCharge", true);
+  
+  // 4. Structure: /Stations/{ID}/Live/ (Initial Reset)
+  String livePath = root_path + "/Live";
+  Firebase.RTDB.setString(&fbdo, livePath + "/Status", "Initializing");
+  Firebase.RTDB.setString(&fbdo, livePath + "/ActiveSource", "None");
+  Firebase.RTDB.setBool(&fbdo, livePath + "/RelayState", false);
+
+  Serial.println("Static Info Uploaded!");
+}
+
+/************** SYNC CONFIG FROM FIREBASE **************/
+void checkConfigUpdate() {
+  if (!Firebase.ready()) return;
+  String configPath = root_path + "/Config";
+
+  // Check Threshold
+  if (Firebase.RTDB.getFloat(&fbdo, configPath + "/ThresholdCM")) {
+    float newVal = fbdo.to<float>();
+    if (newVal > 0 && newVal != threshold_cm) {
+      threshold_cm = newVal;
+      Serial.printf("Updated Threshold: %.2f cm\n", threshold_cm);
+    }
+  }
+
+  // Check Relay Percent
+  if (Firebase.RTDB.getInt(&fbdo, configPath + "/RelayPercent")) {
+    int newPercent = fbdo.to<int>();
+    if (newPercent >= 0 && newPercent <= 100 && newPercent != relay_percent) {
+      relay_percent = newPercent;
+      Serial.printf("Updated Relay Percent: %d%%\n", relay_percent);
+    }
+  }
+
+  // Check Enable Charge Switch
+  if (Firebase.RTDB.getBool(&fbdo, configPath + "/EnableOccupiedCharge")) {
+    enable_occupied_charge = fbdo.to<bool>();
+  }
+}
+
+/************** RELAY CONTROL LOGIC **************/
+// Returns string describing current source
+String manageRelay(bool isOccupied) {
+  bool relayOn = false; // False = Default (Solar), True = Active (DC) or vice versa. 
+  // Let's assume: Relay HIGH = Solar, Relay LOW = DC Adapter (Based on prompt "switch to solar")
+  // Or simpler: Relay HIGH = Active Switching. 
+  // Let's define: HIGH = SOLAR, LOW = DC ADAPTER.
+
+  String sourceName = "";
+
+  if (!isOccupied) {
+    // If available, complete solar
+    digitalWrite(RELAY_PIN, HIGH); // Solar
+    relayOn = true;
+    sourceName = "Solar (Idle)";
+  } else {
+    // If occupied, perform duty cycle
+    // 2 Minutes = 120,000 ms
+    unsigned long cycleTime = 120000;
+    unsigned long currentEpoch = millis(); 
+    unsigned long timeInCycle = currentEpoch % cycleTime; // 0 to 119999
+    
+    // Calculate time window for solar
+    // e.g., 40% of 120,000 = 48,000ms
+    unsigned long solarWindow = (relay_percent * cycleTime) / 100;
+
+    if (timeInCycle < solarWindow) {
+      digitalWrite(RELAY_PIN, HIGH); // Solar ON
+      relayOn = true;
+      sourceName = "Solar (PWM " + String(relay_percent) + "%)";
+    } else {
+      digitalWrite(RELAY_PIN, LOW); // DC Adapter ON
+      relayOn = false;
+      sourceName = "DC Adapter (PWM)";
+    }
+  }
+
+  // Only upload if state changed significantly
+  if (relayOn != lastRelayState) {
+    lastRelayState = relayOn;
+    Firebase.RTDB.setBool(&fbdo, root_path + "/Live/RelayState", relayOn);
+  }
+
+  return sourceName;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(RELAY_PIN, OUTPUT); // Relay
+  pinMode(RESET_PIN, INPUT_PULLUP);
+  
+  digitalWrite(RELAY_PIN, HIGH); // Default to Solar (Safe state)
+
+  Serial.println("Hold BOOT to reset...");
+  delay(2000);
+  if (digitalRead(RESET_PIN) == LOW) {
+    prefs.begin("ev_config", false);
+    prefs.clear();
+    prefs.end();
+    Serial.println("Resetting...");
+    ESP.restart();
+  }
+
+  prefs.begin("ev_config", false);
+  isConfigured = prefs.getBool("configured", false);
+
+  if (!isConfigured) {
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(SETUP_SSID, SETUP_PASS);
+    while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
+    Serial.println(WiFi.localIP());
+    server.on("/", handleRoot);
+    server.on("/save", handleSave);
+    server.begin();
+  } else {
+    wifi_ssid = prefs.getString("ssid");
+    wifi_pass = prefs.getString("pass");
+    fb_key = prefs.getString("apikey");
+    fb_url = prefs.getString("dburl");
+    station_title = prefs.getString("title");
+    station_lat = prefs.getDouble("lat");
+    station_lon = prefs.getDouble("lon");
+    station_uuid = prefs.getString("uuid");
+    station_id = prefs.getInt("id");
+    
+    // Load config defaults if they exist, else defaults apply
+    if(prefs.isKey("thresh")) threshold_cm = prefs.getFloat("thresh");
+    if(prefs.isKey("rel_per")) relay_percent = prefs.getInt("rel_per");
+    
+    root_path = "/stations/" + String(station_id);
+
+    WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
+    while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
+    Serial.println("\nWiFi Connected");
+
+    config.api_key = fb_key;
+    config.database_url = fb_url;
+    
+    if (Firebase.signUp(&config, &auth, "", "")) {
+      Serial.println("Firebase Token Generated");
+    }
+
+    Firebase.begin(&config, &auth);
+    Firebase.reconnectWiFi(true);
+    
+    uploadStaticInfo();
+  }
+  prefs.end();
+}
+
+void loop() {
+  if (!isConfigured) {
+    server.handleClient();
+    return; 
+  }
+
+  /********** CHECK CONFIG FROM DB EVERY 1 MIN **********/
+  if (millis() - lastConfigCheck > 60000) {
+    lastConfigCheck = millis();
+    checkConfigUpdate();
+  }
+
+  /********** SENSOR & LOGIC LOOP **********/
+  // Run logic frequently (e.g. every 1 sec) for relay timing accuracy, 
+  // but maybe throttle uploads to avoid DB spamming.
+  
+  if (Firebase.ready() && (millis() - lastSensorRead > 1000)) {
+    lastSensorRead = millis();
+    
+    // 1. Read Distance
+    long distance = readUltrasonic();
+    if (distance == 0) distance = 999; 
+
+    // 2. Determine Occupancy
+    bool isCarPresent = (distance < threshold_cm);
+    String newStatus = isCarPresent ? "Occupied" : "Available";
+
+    // 3. Manage Relay (This is the new feature)
+    String newActiveSource = manageRelay(isCarPresent);
+
+    Serial.printf("Dist: %ldcm | Status: %s | Src: %s | Solar%%: %d\n",
+                  distance, newStatus.c_str(), newActiveSource.c_str(), relay_percent);
+
+    // 4. Upload Live Data
+    String livePath = root_path + "/Live";
+    
+    // Always update Distance
+    Firebase.RTDB.setFloat(&fbdo, livePath + "/Distance", (float)distance);
+    
+    // Update Status if changed
+    if (newStatus != currentStatus) {
+      currentStatus = newStatus;
+      Firebase.RTDB.setString(&fbdo, livePath + "/Status", newStatus);
+    }
+    
+    // Update Source if changed
+    if (newActiveSource != currentActiveSource) {
+      currentActiveSource = newActiveSource;
+      Firebase.RTDB.setString(&fbdo, livePath + "/ActiveSource", newActiveSource);
+    }
+  }
+}

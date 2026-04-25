@@ -1,0 +1,515 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Preferences.h>
+#include <Firebase_ESP_Client.h>
+#include <addons/TokenHelper.h>
+#include <addons/RTDBHelper.h>
+
+/******** HARDCODED SETUP HOTSPOT *********/
+#define SETUP_SSID “OnePlus Nord”
+#define SETUP_PASS “IFrgtDaPassword”
+
+/******** PIN DEFINITIONS *********/
+#define TRIG_PIN 5
+#define ECHO_PIN 18
+#define RESET_PIN 0
+
+/******** GLOBAL OBJECTS *********/
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+Preferences prefs;
+WebServer server(80);
+
+/******** STATE VARIABLES *********/
+Bool isConfigured = false;
+
+Unsigned long lastSensorRead = 0;
+Unsigned long lastConfigCheck = 0;
+String currentStatus = “Unknown”;
+
+String wifi_ssid, wifi_pass;
+String fb_url, fb_key;
+
+String module_title;
+Double module_lat = 0.0;
+Double module_lon = 0.0;
+String module_uuid;
+Int module_id;
+String root_path;
+
+Float threshold_cm = 50.0;
+
+/******** HELPER FUNCTIONS *********/
+String generateUUID() {
+String uuid = “”;
+For (int I = 0; I < 32; i++) {
+Int r = random(0, 16);
+If (I == 8 || I == 12 || I == 16 || I == 20) uuid += “-“;
+Uuid += String(r, HEX);
+}
+Return uuid;
+}
+
+Long readUltrasonic() {
+digitalWrite(TRIG_PIN, LOW);
+delayMicroseconds(2);
+digitalWrite(TRIG_PIN, HIGH);
+delayMicroseconds(10);
+digitalWrite(TRIG_PIN, LOW);
+long duration = pulseIn(ECHO_PIN, HIGH);
+return (duration * 0.034 / 2.0);
+}
+
+/******** HTML CONFIG PAGE *********/
+Const char* html_page = R”rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+<meta name=”viewport” content=”width=device-width, initial-scale=1”>
+<title>EV Monitor Setup</title>
+<style>
+•
+
+{ box-sizing: border-box; margin: 0; padding: 0; }
+
+Body {
+Font-family: -apple-system, BlinkMacSystemFont, ‘Segoe UI’, sans-serif;
+Background: #f0f2f5;
+Min-height: 100vh;
+Padding: 24px 16px;
+}
+
+.card {
+Background: white;
+Border-radius: 16px;
+Padding: 24px;
+Margin-bottom: 16px;
+Box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+H1 {
+Font-size: 22px;
+Font-weight: 700;
+Color: #1a1a2e;
+Margin-bottom: 4px;
+}
+.subtitle {
+Font-size: 13px;
+Color: #888;
+Margin-bottom: 0;
+}
+H2 {
+Font-size: 13px;
+Font-weight: 600;
+Color: #555;
+Text-transform: uppercase;
+Letter-spacing: 0.5px;
+Margin-bottom: 14px;
+}
+
+Label {
+Display: block;
+Font-size: 13px;
+Font-weight: 500;
+Color: #444;
+Margin-bottom: 5px;
+Margin-top: 14px;
+}
+Label:first-of-type { margin-top: 0; }
+Input[type=text], input[type=password], input[type=number] {
+Width: 100%;
+Padding: 11px 14px;
+Border: 1.5px solid #e0e0e0;
+Border-radius: 10px;
+Font-size: 14px;
+Color: #222;
+Background: #fafafa;
+Transition: border-color 0.2s;
+Outline: none;
+}
+Input:focus {
+Border-color: #4f7df9;
+Background: white;
+}
+.loc-row {
+Display: flex;
+
+Gap: 10px;
+Align-items: flex-end;
+}
+.loc-row > div { flex: 1; }
+#loc-btn {
+Padding: 11px 16px;
+Background: #4f7df9;
+Color: white;
+Border: none;
+Border-radius: 10px;
+Font-size: 13px;
+Font-weight: 600;
+Cursor: pointer;
+White-space: nowrap;
+Flex-shrink: 0;
+Transition: background 0.2s;
+}
+#loc-btn:active { background: #3a66e0; }
+#loc-status {
+Font-size: 12px;
+Margin-top: 8px;
+Padding: 8px 12px;
+Border-radius: 8px;
+Display: none;
+}
+#loc-status.ok { background: #e8f5e9; color: #2e7d32; display: block; }
+
+#loc-status.err { background: #fdecea; color: #c62828; display: block; }
+#loc-status.loading { background: #e3f2fd; color: #1565c0; display: block; }
+.submit-btn {
+Width: 100%;
+Padding: 14px;
+Background: #1a1a2e;
+Color: white;
+Border: none;
+Border-radius: 12px;
+Font-size: 16px;
+Font-weight: 600;
+Cursor: pointer;
+Margin-top: 8px;
+Transition: background 0.2s;
+}
+.submit-btn:active { background: #333; }
+.coords-row {
+Display: flex;
+Gap: 10px;
+}
+.coords-row > div { flex: 1; }
+</style>
+</head>
+<body>
+
+<div class=”card”>
+
+<h1>EV Monitor Setup</h1>
+<p class=”subtitle”>Configure this monitoring module</p>
+</div>
+
+<form action=”/save” method=”POST”>
+
+<div class=”card”>
+<h2>WiFi & Firebase</h2>
+<label>WiFi SSID</label>
+<input type=”text” name=”ssid” value=”OnePlus Nord” required>
+<label>WiFi Password</label>
+<input type=”password” name=”pass” value=”IFrgtDaPassword”>
+<label>Firebase API Key</label>
+<input type=”text” name=”apikey”
+value=”AIzaSyDAF5cDSgVwUog6mHYSSUCPywS4DF9FkoU” required>
+<label>Firebase DB URL</label>
+<input type=”text” name=”dburl” value=”el-project-e45df-default-rtdb.asiasoutheast1.firebasedatabase.app” required>
+</div>
+
+<div class=”card”>
+<h2>Module Details</h2>
+<label>Module Name</label>
+<input type=”text” name=”title” placeholder=”e.g. Parking Bay 3” value=”My EV Monitor”
+required>
+<label>Detection Threshold (cm)</label>
+<input type=”number” step=”0.1” name=”thresh” value=”50” required>
+
+</div>
+
+<div class=”card”>
+<h2>Location</h2>
+<div class=”loc-row”>
+<div>
+<label>Auto-detect</label>
+</div>
+<button type=”button” id=”loc-btn” onclick=”getLocation()”>Get GPS</button>
+</div>
+<div id=”loc-status”></div>
+<div class=”coords-row” style=”margin-top:14px”>
+<div>
+<label>Latitude</label>
+<input type=”text” id=”lat” name=”lat” placeholder=”12.9716” required>
+</div>
+<div>
+<label>Longitude</label>
+<input type=”text” id=”lon” name=”lon” placeholder=”77.5946” required>
+</div>
+</div>
+</div>
+
+<div class=”card”>
+<input type=”submit” class=”submit-btn” value=”Save & Restart”>
+</div>
+
+</form>
+
+<script>
+// Auto-request location on page load
+Window.addEventListener(‘load’, function() {
+getLocation();
+});
+
+Function getLocation() {
+Var status = document.getElementById(‘loc-status’);
+Var btn = document.getElementById(‘loc-btn’);
+
+If (!navigator.geolocation) {
+Status.className = ‘err’;
+Status.textContent = ‘Geolocation not supported by this browser.’;
+Return;
+}
+
+Status.className = ‘loading’;
+Status.textContent = ‘Requesting location…’;
+Btn.textContent = ‘…’;
+Btn.disabled = true;
+
+Navigator.geolocation.getCurrentPosition(
+Function(position) {
+
+Var lat = position.coords.latitude.toFixed(7);
+Var lon = position.coords.longitude.toFixed(7);
+Document.getElementById(‘lat’).value = lat;
+Document.getElementById(‘lon’).value = lon;
+Status.className = ‘ok’;
+Status.textContent = ‘Location set: ‘ + lat + ‘, ‘ + lon + ‘ (accuracy: ‘ +
+Math.round(position.coords.accuracy) + ‘m)’;
+Btn.textContent = ‘Refresh’;
+Btn.disabled = false;
+},
+Function(error) {
+Var msg = ‘’;
+Switch(error.code) {
+Case 1: msg = ‘Permission denied. Please allow location access and try again.’;
+break;
+Case 2: msg = ‘Position unavailable. Enter coordinates manually.’; break;
+Case 3: msg = ‘Timed out. Try again or enter manually.’; break;
+Default: msg = ‘Unknown error. Enter coordinates manually.’;
+}
+Status.className = ‘err’;
+Status.textContent = msg;
+Btn.textContent = ‘Retry’;
+Btn.disabled = false;
+},
+{ enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+);
+}
+
+</script>
+
+</body>
+</html>
+)rawliteral”;
+
+Void handleRoot() {
+Server.send(200, “text/html”, html_page);
+}
+
+Void handleSave() {
+If (server.hasArg(“ssid”)) {
+String rawURL = server.arg(“dburl”);
+rawURL.trim();
+rawURL.replace(https://, “”);
+rawURL.replace(http://, “”);
+if (rawURL.endsWith(“/”)) rawURL.remove(rawURL.length() – 1);
+
+prefs.begin(“mod_config”, false);
+prefs.putString(“ssid”, server.arg(“ssid”));
+prefs.putString(“pass”, server.arg(“pass”));
+prefs.putString(“apikey”, server.arg(“apikey”));
+prefs.putString(“dburl”, rawURL);
+prefs.putString(“title”, server.arg(“title”));
+prefs.putFloat(“thresh”, server.arg(“thresh”).toFloat());
+prefs.putDouble(“lat”, server.arg(“lat”).toDouble());
+
+prefs.putDouble(“lon”, server.arg(“lon”).toDouble());
+
+if (!prefs.isKey(“uuid”)) {
+prefs.putString(“uuid”, generateUUID());
+prefs.putInt(“id”, random(10000, 99999));
+}
+
+Prefs.putBool(“configured”, true);
+Prefs.end();
+
+Server.send(200, “text/html”, R”(
+<!DOCTYPE html><html><head>
+<meta name=”viewport” content=”width=device-width, initial-scale=1”>
+<style>
+Body { font-family: -apple-system, sans-serif; display: flex; align-items: center;
+Justify-content: center; min-height: 100vh; background: #f0f2f5; margin: 0; }
+.card { background: white; border-radius: 16px; padding: 40px 32px;
+Text-align: center; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+H1 { font-size: 20px; color: #1a1a2e; margin-bottom: 8px; }
+P { color: #888; font-size: 14px; }
+</style></head><body>
+<div class=”card”>
+<h1>Saved!</h1>
+<p>Module is restarting and will connect to WiFi.</p>
+</div>
+</body></html>
+
+)”);
+Delay(2000);
+ESP.restart();
+}
+}
+
+/******** FIREBASE *********/
+Void uploadStaticInfo() {
+Serial.println(“Uploading static info…”);
+
+Firebase.RTDB.setInt(&fbdo, root_path + “/ID”, module_id);
+
+// Type field — lets the website know this is a monitor-only node
+Firebase.RTDB.setString(&fbdo, root_path + “/Type”, “module”);
+
+String infoPath = root_path + “/Info”;
+Firebase.RTDB.setString(&fbdo, infoPath + “/UUID”,
+Firebase.RTDB.setString(&fbdo, infoPath + “/Title”,
+
+module_uuid);
+module_title);
+
+Firebase.RTDB.setDouble(&fbdo, infoPath + “/Latitude”, module_lat);
+Firebase.RTDB.setDouble(&fbdo, infoPath + “/Longitude”, module_lon);
+
+Firebase.RTDB.setFloat(&fbdo, root_path + “/Config/ThresholdCM”, threshold_cm);
+
+String livePath = root_path + “/Live”;
+Firebase.RTDB.setString(&fbdo, livePath + “/Status”, “Initializing”);
+Firebase.RTDB.setFloat(&fbdo, livePath + “/Distance”, 999);
+
+Serial.println(“Done.”);
+}
+
+Void checkConfigUpdate() {
+If (!Firebase.ready()) return;
+If (Firebase.RTDB.getFloat(&fbdo, root_path + “/Config/ThresholdCM”)) {
+Float newVal = fbdo.to<float>();
+If (newVal > 0 && newVal != threshold_cm) {
+Threshold_cm = newVal;
+Serial.printf(“Threshold updated: %.2f cm\n”, threshold_cm);
+}
+}
+}
+
+/******** SETUP *********/
+Void setup() {
+Serial.begin(115200);
+pinMode(TRIG_PIN, OUTPUT);
+pinMode(ECHO_PIN, INPUT);
+pinMode(RESET_PIN, INPUT_PULLUP);
+
+Serial.println(“Hold BOOT to reset…”);
+Delay(2000);
+If (digitalRead(RESET_PIN) == LOW) {
+Prefs.begin(“mod_config”, false);
+
+Prefs.clear();
+Prefs.end();
+Serial.println(“Config cleared. Restarting…”);
+ESP.restart();
+}
+
+Prefs.begin(“mod_config”, false);
+isConfigured = prefs.getBool(“configured”, false);
+
+if (!isConfigured) {
+WiFi.mode(WIFI_STA);
+WiFi.begin(SETUP_SSID, SETUP_PASS);
+While (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print(“.”); }
+Serial.print(“\nOpen this IP to configure: “);
+Serial.println(WiFi.localIP());
+Server.on(“/”, handleRoot);
+Server.on(“/save”, handleSave);
+Server.begin();
+
+} else {
+Wifi_ssid
+
+= prefs.getString(“ssid”);
+
+Wifi_pass
+
+= prefs.getString(“pass”);
+
+Fb_key
+
+= prefs.getString(“apikey”);
+
+Fb_url
+
+= prefs.getString(“dburl”);
+
+Module_title = prefs.getString(“title”);
+Module_lat = prefs.getDouble(“lat”);
+
+Module_lon = prefs.getDouble(“lon”);
+Module_uuid = prefs.getString(“uuid”);
+Module_id
+
+= prefs.getInt(“id”);
+
+If (prefs.isKey(“thresh”)) threshold_cm = prefs.getFloat(“thresh”);
+
+Root_path = “/stations/” + String(module_id);
+
+WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
+While (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print(“.”); }
+Serial.println(“\nWiFi connected”);
+
+Config.api_key
+
+= fb_key;
+
+Config.database_url = fb_url;
+If (Firebase.signUp(&config, &auth, “”, “”)) {
+Serial.println(“Firebase token generated”);
+}
+Firebase.begin(&config, &auth);
+Firebase.reconnectWiFi(true);
+
+uploadStaticInfo();
+}
+Prefs.end();
+}
+
+/******** LOOP *********/
+Void loop() {
+
+If (!isConfigured) {
+Server.handleClient();
+Return;
+}
+
+If (millis() – lastConfigCheck > 60000) {
+lastConfigCheck = millis();
+checkConfigUpdate();
+}
+
+If (Firebase.ready() && (millis() – lastSensorRead > 1000)) {
+lastSensorRead = millis();
+
+long distance = readUltrasonic();
+if (distance == 0) distance = 999;
+
+bool isCarPresent = (distance < threshold_cm);
+String newStatus = isCarPresent ? “Occupied” : “Available”;
+
+Serial.printf(“Dist: %ldcm | Status: %s\n”, distance, newStatus.c_str());
+
+String livePath = root_path + “/Live”;
+Firebase.RTDB.setFloat(&fbdo, livePath + “/Distance”, (float)distance);
+
+If (newStatus != currentStatus) {
+currentStatus = newStatus;
+
+Firebase.RTDB.setString(&fbdo, livePath + “/Status”, newStatus);
+}
+}
+}
+
+
