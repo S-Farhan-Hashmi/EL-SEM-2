@@ -159,61 +159,92 @@ function showRecommendations(recs, stationName) {
     if (!area || !list) return;
 
     list.innerHTML = '';
-    
-    const info = document.createElement('div');
-    info.style.fontSize = '0.75rem';
-    info.style.color = '#94a3b8';
-    info.style.marginBottom = '0.5rem';
-    info.innerHTML = `Near <strong>${escapeHtml(stationName)}</strong>`;
-    list.appendChild(info);
+
+    // Station badge
+    const stationBadge = document.createElement('div');
+    stationBadge.className = 'recs-station-badge';
+    stationBadge.innerHTML = `<span class="recs-station-icon">📍</span> Near <strong>${escapeHtml(stationName)}</strong>`;
+    list.appendChild(stationBadge);
+
+    // Count header
+    const countHeader = document.createElement('div');
+    countHeader.className = 'recs-count-header';
+    countHeader.textContent = `${recs.length} restaurant${recs.length !== 1 ? 's' : ''} found`;
+    list.appendChild(countHeader);
 
     if (recs.length === 0) {
-        list.innerHTML += '<div style="color: #94a3b8; font-size: 0.8rem; padding: 0.5rem 0;">No AI recommendations found.</div>';
+        const empty = document.createElement('div');
+        empty.className = 'recs-empty';
+        empty.innerHTML = `
+            <div class="recs-empty-icon">🍽️</div>
+            <div class="recs-empty-text">No nearby restaurants found</div>
+            <div class="recs-empty-sub">Try a station in a busier area</div>
+        `;
+        list.appendChild(empty);
     } else {
-        recs.forEach(rec => {
-            const item = document.createElement('div');
-            item.style.background = 'rgba(255, 255, 255, 0.08)';
-            item.style.border = '1px solid rgba(255, 255, 255, 0.15)';
-            item.style.borderRadius = '10px';
-            item.style.padding = '12px 14px';
-            item.style.display = 'flex';
-            item.style.flexDirection = 'column';
-            item.style.gap = '8px';
-            item.style.transition = 'transform 0.2s ease, background 0.2s ease';
-            item.onmouseover = () => { item.style.background = 'rgba(255, 255, 255, 0.12)'; item.style.transform = 'translateY(-2px)'; };
-            item.onmouseout = () => { item.style.background = 'rgba(255, 255, 255, 0.08)'; item.style.transform = 'translateY(0)'; };
-            
-            const nameDiv = document.createElement('div');
-            nameDiv.style.fontWeight = '600';
-            nameDiv.style.fontSize = '0.95rem';
-            nameDiv.style.color = '#ffffff';
-            nameDiv.style.lineHeight = '1.3';
-            nameDiv.style.wordBreak = 'break-word';
-            nameDiv.textContent = rec.name;
-            
-            const metaDiv = document.createElement('div');
-            metaDiv.style.display = 'flex';
-            metaDiv.style.justifyContent = 'space-between';
-            metaDiv.style.alignItems = 'center';
-            metaDiv.style.fontSize = '0.8rem';
-            
-            const ratingSpan = document.createElement('span');
-            ratingSpan.innerHTML = `⭐ <strong style="color: #fcd34d;">${rec.rating.toFixed(1)}</strong>`;
-            ratingSpan.style.background = 'rgba(0,0,0,0.3)';
-            ratingSpan.style.padding = '2px 6px';
-            ratingSpan.style.borderRadius = '4px';
-            
-            const distSpan = document.createElement('span');
-            const distDisp = (rec.distance * 69).toFixed(2);
-            distSpan.innerHTML = `<span style="opacity:0.7;">📍</span> ~${distDisp} mi`; 
-            distSpan.style.color = '#cbd5e1';
+        recs.forEach((rec, index) => {
+            const card = document.createElement('div');
+            card.className = 'recs-card';
+            card.style.animationDelay = `${index * 0.06}s`;
 
-            metaDiv.appendChild(ratingSpan);
-            metaDiv.appendChild(distSpan);
-            
-            item.appendChild(nameDiv);
-            item.appendChild(metaDiv);
-            list.appendChild(item);
+            // Rank number
+            const rank = document.createElement('div');
+            rank.className = 'recs-rank';
+            rank.textContent = `${index + 1}`;
+
+            // Info section
+            const info = document.createElement('div');
+            info.className = 'recs-card-info';
+
+            // Name
+            const name = document.createElement('div');
+            name.className = 'recs-card-name';
+            name.textContent = rec.name;
+
+            // Rating row
+            const ratingRow = document.createElement('div');
+            ratingRow.className = 'recs-rating-row';
+
+            // Star rendering
+            const starsContainer = document.createElement('div');
+            starsContainer.className = 'recs-stars';
+            const fullStars = Math.floor(rec.rating);
+            const hasHalf = rec.rating - fullStars >= 0.5;
+            for (let i = 0; i < 5; i++) {
+                const star = document.createElement('span');
+                star.className = 'recs-star';
+                if (i < fullStars) {
+                    star.classList.add('filled');
+                    star.textContent = '★';
+                } else if (i === fullStars && hasHalf) {
+                    star.classList.add('half');
+                    star.textContent = '★';
+                } else {
+                    star.textContent = '☆';
+                }
+                starsContainer.appendChild(star);
+            }
+
+            const ratingNum = document.createElement('span');
+            ratingNum.className = 'recs-rating-num';
+            ratingNum.textContent = rec.rating.toFixed(1);
+
+            ratingRow.appendChild(starsContainer);
+            ratingRow.appendChild(ratingNum);
+
+            // Distance badge
+            const distBadge = document.createElement('div');
+            distBadge.className = 'recs-dist-badge';
+            const distMiles = (rec.distance * 69).toFixed(2);
+            distBadge.innerHTML = `<span class="recs-dist-icon">🚶</span>${distMiles} mi`;
+
+            info.appendChild(name);
+            info.appendChild(ratingRow);
+
+            card.appendChild(rank);
+            card.appendChild(info);
+            card.appendChild(distBadge);
+            list.appendChild(card);
         });
     }
 
@@ -221,7 +252,7 @@ function showRecommendations(recs, stationName) {
 }
 
 async function checkProximityForRecommendations(userLat, userLng) {
-    const thresholdMiles = 5;
+    const thresholdMiles = 0.5;
 
     // Collect all candidates: [dist, lat, lng, title]
     const candidates = [];
