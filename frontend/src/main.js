@@ -1,12 +1,12 @@
-import { initializeFirebase, getDatabase } from './auth.js?v=10';
-import { fetchChargingStations, fetchRouteFromGraphHopper } from './api.js?v=10';
+import { initializeFirebase, getDatabase } from './auth.js';
+import { fetchChargingStations, fetchRouteFromGraphHopper } from './api.js';
 import {
     loadOpenStreetMapView,
     loadStationsFromFirebase,
     handleCalculate,
     drawRoute,
     userMarker
-} from './map.js?v=10';
+} from './map.js';
 
 // ========= CHATBOT CLASS =========
 class Chatbot {
