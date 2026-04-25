@@ -252,7 +252,7 @@ function showRecommendations(recs, stationName) {
 }
 
 async function checkProximityForRecommendations(userLat, userLng) {
-    const thresholdMiles = 0.5;
+    const thresholdMiles = 0.1;
 
     // Collect all candidates: [dist, lat, lng, title]
     const candidates = [];
