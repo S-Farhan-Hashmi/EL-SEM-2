@@ -1,0 +1,166 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Preferences.h>
+#include <Firebase_ESP_Client.h>
+#include <addons/TokenHelper.h>
+#include <addons/RTDBHelper.h>
+
+/******** HARDCODED SETUP HOTSPOT *********/
+#define SETUP_SSID "OnePlus Nord"
+#define SETUP_PASS "IFrgtDaPassword"
+
+/******** PIN DEFINITIONS *********/
+#define TRIG_PIN  5
+#define ECHO_PIN  18
+#define RESET_PIN 0
+
+/******** GLOBAL OBJECTS *********/
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+Preferences prefs;
+WebServer server(80);
+
+/******** STATE VARIABLES *********/
+bool isConfigured = false;
+unsigned long lastSensorRead  = 0;
+unsigned long lastConfigCheck = 0;
+String currentStatus = "Unknown";
+
+String wifi_ssid, wifi_pass;
+String fb_url, fb_key;
+
+String module_title;
+double module_lat = 0.0;
+double module_lon = 0.0;
+String module_uuid;
+int    module_id;
+String root_path;
+
+float threshold_cm = 50.0;
+
+/******** HELPER FUNCTIONS *********/
+String generateUUID() {
+  String uuid = "";
+  for (int i = 0; i < 32; i++) {
+    int r = random(0, 16);
+    if (i == 8 || i == 12 || i == 16 || i == 20) uuid += "-";
+    uuid += String(r, HEX);
+  }
+  return uuid;
+}
+
+long readUltrasonic() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  long duration = pulseIn(ECHO_PIN, HIGH);
+  return (duration * 0.034 / 2.0);
+}
+
+/******** HTML CONFIG PAGE *********/
+const char* html_page = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EV Monitor Setup</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f0f2f5;
+      min-height: 100vh;
+      padding: 24px 16px;
+    }
+    .card {
+      background: white;
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+    h1 {
+      font-size: 22px;
+      font-weight: 700;
+      color: #1a1a2e;
+      margin-bottom: 4px;
+    }
+    .subtitle {
+      font-size: 13px;
+      color: #888;
+      margin-bottom: 0;
+    }
+    h2 {
+      font-size: 13px;
+      font-weight: 600;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 14px;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: #444;
+      margin-bottom: 5px;
+      margin-top: 14px;
+    }
+    label:first-of-type { margin-top: 0; }
+    input[type=text], input[type=password], input[type=number] {
+      width: 100%;
+      padding: 11px 14px;
+      border: 1.5px solid #e0e0e0;
+      border-radius: 10px;
+      font-size: 14px;
+      color: #222;
+      background: #fafafa;
+      transition: border-color 0.2s;
+      outline: none;
+    }
+    input:focus {
+      border-color: #4f7df9;
+      background: white;
+    }
+    .loc-row {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+    }
+    .loc-row > div { flex: 1; }
+    #loc-btn {
+      padding: 11px 16px;
+      background: #4f7df9;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: background 0.2s;
+    }
+    #loc-btn:active { background: #3a66e0; }
+    #loc-status {
+      font-size: 12px;
+      margin-top: 8px;
+      padding: 8px 12px;
+      border-radius: 8px;
+      display: none;
+    }
+    #loc-status.ok  { background: #e8f5e9; color: #2e7d32; display: block; }
+    #loc-status.err { background: #fdecea; color: #c62828; display: block; }
+    #loc-status.loading { background: #e3f2fd; color: #1565c0; display: block; }
+    .submit-btn {
+      width: 100%;
+      padding: 14px;
+      background: #1a1a2e;
+      color: white;
+      border: none;
+      border-radius: 12px;
+      font-size: 16px;
