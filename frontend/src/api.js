@@ -153,7 +153,11 @@ export async function fetchRestaurantRecommendations(lat, lng) {
         const data = await response.json();
         return data;
     } catch (err) {
-        console.error('Failed to fetch restaurant recommendations:', err);
+        if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError') || err.name === 'TypeError') {
+            console.error('⚠️ Cannot reach Flask backend at http://localhost:5000. Make sure to run: python backend-ml/app.py');
+        } else {
+            console.error('Failed to fetch restaurant recommendations:', err);
+        }
         return null;
     }
 }

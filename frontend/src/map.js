@@ -273,12 +273,16 @@ async function checkProximityForRecommendations(userLat, userLng) {
             const pos = marker.getLatLng();
             const dist = calculateDistanceMiles(userLat, userLng, pos.lat, pos.lng);
             const title = marker.options.title || `Station ${id}`;
+            console.log(`[Proximity] Firebase station "${title}" is ${dist.toFixed(3)} mi away (threshold: ${thresholdMiles} mi)`);
             if (dist <= thresholdMiles) {
                 candidates.push({ dist, lat: pos.lat, lng: pos.lng, title });
             }
         }
+    } else {
+        console.log('[Proximity] window.firebaseStationMarkerMap not yet available');
     }
 
+    console.log(`[Proximity] ${candidates.length} station(s) within ${thresholdMiles} mi`);
     if (candidates.length === 0) return;
 
     // Sort by distance — closest first
@@ -288,7 +292,9 @@ async function checkProximityForRecommendations(userLat, userLng) {
     for (const candidate of candidates) {
         if (!recommendedStations.has(candidate.title)) {
             recommendedStations.add(candidate.title);
+            console.log(`[Proximity] Fetching recommendations near "${candidate.title}" (${candidate.lat}, ${candidate.lng})...`);
             const recs = await fetchRestaurantRecommendations(candidate.lat, candidate.lng);
+            console.log(`[Proximity] API response:`, recs);
             if (recs && recs.length > 0) {
                 showRecommendations(recs, candidate.title);
                 return;
@@ -300,9 +306,13 @@ async function checkProximityForRecommendations(userLat, userLng) {
     // force-show recommendations for the closest one (ensures at least 1 recommendation)
     if (candidates.length > 0) {
         const closest = candidates[0];
+        console.log(`[Proximity] Force-fetching recommendations for closest: "${closest.title}"`);
         const recs = await fetchRestaurantRecommendations(closest.lat, closest.lng);
+        console.log(`[Proximity] Force-fetch API response:`, recs);
         if (recs && recs.length > 0) {
             showRecommendations(recs, closest.title);
+        } else {
+            console.warn('[Proximity] Backend returned no recommendations. Is the Flask server running on localhost:5000?');
         }
     }
 }
@@ -961,6 +971,14 @@ export function loadStationsFromFirebase() {
                 }
                 map.invalidateSize();
                 statusMessage(`📡 ${validMarkerLatLngs.length} own station(s) loaded from Firebase.`, 'success');
+            }
+
+            // After Firebase stations are loaded/updated, re-check proximity for recommendations
+            // This fixes the race condition where geolocation fires before Firebase loads
+            if (userMarker) {
+                const pos = userMarker.getLatLng();
+                console.log('[Firebase] Stations loaded — triggering proximity check for recommendations...');
+                checkProximityForRecommendations(pos.lat, pos.lng);
             }
         },
         error => {
