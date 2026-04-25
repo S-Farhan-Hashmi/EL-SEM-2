@@ -848,66 +848,71 @@ export function loadStationsFromFirebase() {
     const firebaseDatabase = getDatabase();
 
     if (!firebaseDatabase) {
+        console.warn('Firebase DB not ready, retrying...');
         setTimeout(() => loadStationsFromFirebase(), 500);
         return;
     }
     if (!mapInitialized || !map) {
+        console.warn('Map not ready, retrying...');
         setTimeout(() => loadStationsFromFirebase(), 500);
         return;
     }
 
-    console.log('Loading stations from Firebase...');
+    console.log('✅ Connecting to Firebase Realtime DB...');
     const stationsRef = firebaseDatabase.ref('stations');
 
     if (!window.firebaseStationMarkerMap) {
         window.firebaseStationMarkerMap = {};
     }
 
-    stationsRef.once('value')
-        .then(snapshot => {
+    // Use a single .on('value') listener — fires immediately with current data
+    // and again on every update. No need for .once() first.
+    stationsRef.on('value', snapshot => {
             if (!snapshot.exists()) {
-                console.log('No stations found in Firebase');
+                console.warn('⚠️ Firebase snapshot empty — no stations found at /stations/');
                 return;
             }
 
             const stationsData = snapshot.val();
             const stationIds = Object.keys(stationsData);
-            console.log(`Found ${stationIds.length} station(s) in Firebase`);
+            console.log(`📡 Firebase: found ${stationIds.length} station(s):`, stationIds);
 
-            stationIds.forEach(stationId => {
-                createOrUpdateStationMarker(stationsData[stationId], stationId, window.firebaseStationMarkerMap);
-            });
-
-            console.log(`✓ Created/updated ${Object.keys(window.firebaseStationMarkerMap).length} marker(s)`);
-
-            stationsRef.on('value', updateSnapshot => {
-                if (!updateSnapshot.exists()) {
-                    Object.values(window.firebaseStationMarkerMap).forEach(m => { if (m) m.remove(); });
-                    window.firebaseStationMarkerMap = {};
-                    return;
+            // Remove markers for stations that no longer exist
+            const currentIds = Object.keys(window.firebaseStationMarkerMap);
+            currentIds.forEach(id => {
+                if (!stationIds.includes(id)) {
+                    const m = window.firebaseStationMarkerMap[id];
+                    if (m) { m.remove(); delete window.firebaseStationMarkerMap[id]; }
                 }
-
-                const updatedStations = updateSnapshot.val();
-                const updatedIds = Object.keys(updatedStations);
-                const currentIds = Object.keys(window.firebaseStationMarkerMap);
-
-                currentIds.forEach(id => {
-                    if (!updatedIds.includes(id)) {
-                        const m = window.firebaseStationMarkerMap[id];
-                        if (m) {
-                            m.remove();
-                            delete window.firebaseStationMarkerMap[id];
-                            console.log(`✗ Removed marker for station ${id}`);
-                        }
-                    }
-                });
-
-                updatedIds.forEach(id => {
-                    createOrUpdateStationMarker(updatedStations[id], id, window.firebaseStationMarkerMap);
-                });
             });
-        })
-        .catch(error => console.error('Error loading stations from Firebase:', error));
+
+            // Create or update a marker for each station
+            const validMarkerLatLngs = [];
+            stationIds.forEach(stationId => {
+                const m = createOrUpdateStationMarker(stationsData[stationId], stationId, window.firebaseStationMarkerMap);
+                if (m) validMarkerLatLngs.push(m.getLatLng());
+            });
+
+            console.log(`✓ ${Object.keys(window.firebaseStationMarkerMap).length} marker(s) on map`);
+
+            // *** KEY FIX: zoom map to show the Firebase stations ***
+            // Only do this on first load (when the map is still at the default view)
+            if (validMarkerLatLngs.length > 0 && !window.firebaseZoomedToStations) {
+                window.firebaseZoomedToStations = true;
+                if (validMarkerLatLngs.length === 1) {
+                    map.setView(validMarkerLatLngs[0], 15);
+                } else {
+                    map.fitBounds(L.latLngBounds(validMarkerLatLngs), { padding: [60, 60] });
+                }
+                map.invalidateSize();
+                statusMessage(`📡 ${validMarkerLatLngs.length} own station(s) loaded from Firebase.`, 'success');
+            }
+        },
+        error => {
+            console.error('❌ Firebase read error:', error.message || error);
+            statusMessage('Failed to load own stations from Firebase.', 'error');
+        }
+    );
 }
 
 // ========= FIREBASE LOCATION LISTENER =========
