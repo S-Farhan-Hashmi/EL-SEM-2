@@ -220,33 +220,55 @@ function showRecommendations(recs, stationName) {
 async function checkProximityForRecommendations(userLat, userLng) {
     const thresholdMiles = 5;
 
-    // Check OCM stations
+    // Collect all candidates: [dist, lat, lng, title]
+    const candidates = [];
+
+    // OCM stations
     for (const marker of stationMarkers) {
         const pos = marker.getLatLng();
         const dist = calculateDistanceMiles(userLat, userLng, pos.lat, pos.lng);
         const title = marker.options.title || 'Unknown Station';
-        
-        if (dist <= thresholdMiles && !recommendedStations.has(title)) {
-            recommendedStations.add(title);
-            const recs = await fetchRestaurantRecommendations(pos.lat, pos.lng);
-            if (recs) showRecommendations(recs, title);
-            return; // Show for closest station only
+        if (dist <= thresholdMiles) {
+            candidates.push({ dist, lat: pos.lat, lng: pos.lng, title });
         }
     }
 
-    // Check Firebase stations
+    // Firebase stations
     if (window.firebaseStationMarkerMap) {
         for (const [id, marker] of Object.entries(window.firebaseStationMarkerMap)) {
             const pos = marker.getLatLng();
             const dist = calculateDistanceMiles(userLat, userLng, pos.lat, pos.lng);
             const title = marker.options.title || `Station ${id}`;
+            if (dist <= thresholdMiles) {
+                candidates.push({ dist, lat: pos.lat, lng: pos.lng, title });
+            }
+        }
+    }
 
-            if (dist <= thresholdMiles && !recommendedStations.has(title)) {
-                recommendedStations.add(title);
-                const recs = await fetchRestaurantRecommendations(pos.lat, pos.lng);
-                if (recs) showRecommendations(recs, title);
+    if (candidates.length === 0) return;
+
+    // Sort by distance — closest first
+    candidates.sort((a, b) => a.dist - b.dist);
+
+    // Pick the closest one that hasn't been recommended yet
+    for (const candidate of candidates) {
+        if (!recommendedStations.has(candidate.title)) {
+            recommendedStations.add(candidate.title);
+            const recs = await fetchRestaurantRecommendations(candidate.lat, candidate.lng);
+            if (recs && recs.length > 0) {
+                showRecommendations(recs, candidate.title);
                 return;
             }
+        }
+    }
+
+    // If all nearby stations were already in the set but we still have candidates,
+    // force-show recommendations for the closest one (ensures at least 1 recommendation)
+    if (candidates.length > 0) {
+        const closest = candidates[0];
+        const recs = await fetchRestaurantRecommendations(closest.lat, closest.lng);
+        if (recs && recs.length > 0) {
+            showRecommendations(recs, closest.title);
         }
     }
 }
@@ -306,6 +328,8 @@ export function drawRoute(points) {
 export function clearStationMarkers() {
     stationMarkers.forEach(marker => marker.remove());
     stationMarkers = [];
+    // Reset the recommendation cache so new stations are checked fresh
+    recommendedStations.clear();
 }
 
 export function addStationMarkers(stations) {
@@ -500,6 +524,12 @@ export async function handleCalculate() {
         addStationMarkers(stations);
         stationInfoEl.textContent = `${stations.length}`;
         statusMessage(`Found ${stations.length} charging station${stations.length === 1 ? '' : 's'} in range.`, 'success');
+
+        // Immediately check proximity for recommendations now that stations are loaded
+        if (userMarker) {
+            const pos = userMarker.getLatLng();
+            checkProximityForRecommendations(pos.lat, pos.lng);
+        }
 
         if (stations.length > 0) {
             const bounds = L.latLngBounds([center]);
