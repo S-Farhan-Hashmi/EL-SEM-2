@@ -144,20 +144,121 @@ export async function fetchRouteFromGraphHopper(startLat, startLng, endLat, endL
 }
 
 // ========= ML RECOMMENDATIONS =========
+let _cachedRestaurants = null;
+
+async function loadRestaurantCSV() {
+    if (_cachedRestaurants) return _cachedRestaurants;
+    try {
+        // Try multiple possible paths for the CSV
+        const paths = [
+            'backend-ml/data/Bengaluru_Restaurants.csv',
+            '../backend-ml/data/Bengaluru_Restaurants.csv',
+            './backend-ml/data/Bengaluru_Restaurants.csv'
+        ];
+        let csvText = null;
+        for (const path of paths) {
+            try {
+                const resp = await fetch(path);
+                if (resp.ok) {
+                    csvText = await resp.text();
+                    console.log(`[KNN Fallback] Loaded CSV from: ${path}`);
+                    break;
+                }
+            } catch (e) { /* try next path */ }
+        }
+        if (!csvText) {
+            console.error('[KNN Fallback] Could not load restaurant CSV from any path');
+            return null;
+        }
+
+        // Parse CSV
+        const lines = csvText.split('\n');
+        const restaurants = [];
+        for (let i = 1; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+
+            // Handle CSV with quoted fields (commas inside quotes)
+            const fields = [];
+            let current = '';
+            let inQuotes = false;
+            for (let j = 0; j < line.length; j++) {
+                const ch = line[j];
+                if (ch === '"') {
+                    inQuotes = !inQuotes;
+                } else if (ch === ',' && !inQuotes) {
+                    fields.push(current.trim());
+                    current = '';
+                } else {
+                    current += ch;
+                }
+            }
+            fields.push(current.trim());
+
+            // CSV columns: name, cuisine, DietaryRestrictions, latitude, longitude, phone, rating
+            if (fields.length >= 7) {
+                const lat = parseFloat(fields[3]);
+                const lng = parseFloat(fields[4]);
+                const rating = parseFloat(fields[6]) || 3.0;
+                const name = fields[0];
+                if (!isNaN(lat) && !isNaN(lng) && name) {
+                    restaurants.push({ name, lat, lng, rating });
+                }
+            }
+        }
+
+        console.log(`[KNN Fallback] Parsed ${restaurants.length} restaurants from CSV`);
+        _cachedRestaurants = restaurants;
+        return restaurants;
+    } catch (err) {
+        console.error('[KNN Fallback] Error loading CSV:', err);
+        return null;
+    }
+}
+
+function knnRecommend(restaurants, queryLat, queryLng, topN = 5) {
+    // Calculate Euclidean distance (same as sklearn KNN with ball_tree on lat/lng)
+    const withDist = restaurants.map(r => {
+        const dLat = r.lat - queryLat;
+        const dLng = r.lng - queryLng;
+        const dist = Math.sqrt(dLat * dLat + dLng * dLng);
+        return { name: r.name, rating: r.rating, distance: dist };
+    });
+
+    // Sort by distance ascending
+    withDist.sort((a, b) => a.distance - b.distance);
+
+    // Return top N
+    return withDist.slice(0, topN);
+}
+
 export async function fetchRestaurantRecommendations(lat, lng) {
+    // Try Flask backend first
     try {
         const response = await fetch(`http://localhost:5000/recommend?lat=${lat}&lng=${lng}`);
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+        if (response.ok) {
+            const data = await response.json();
+            if (data && data.length > 0) {
+                console.log(`[Recommendations] Got ${data.length} results from Flask backend`);
+                return data;
+            }
         }
-        const data = await response.json();
-        return data;
     } catch (err) {
-        if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError') || err.name === 'TypeError') {
-            console.error('⚠️ Cannot reach Flask backend at http://localhost:5000. Make sure to run: python backend-ml/app.py');
-        } else {
-            console.error('Failed to fetch restaurant recommendations:', err);
+        console.warn('[Recommendations] Flask backend unavailable, using browser-side KNN fallback');
+    }
+
+    // Fallback: browser-side KNN using CSV data
+    try {
+        const restaurants = await loadRestaurantCSV();
+        if (!restaurants || restaurants.length === 0) {
+            console.error('[Recommendations] No restaurant data available for fallback');
+            return null;
         }
+        const recs = knnRecommend(restaurants, lat, lng, 5);
+        console.log(`[Recommendations] Browser KNN found ${recs.length} results`);
+        return recs;
+    } catch (err) {
+        console.error('[Recommendations] Fallback KNN failed:', err);
         return null;
     }
 }
