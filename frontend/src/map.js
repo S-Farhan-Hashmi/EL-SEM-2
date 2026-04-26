@@ -280,7 +280,7 @@ async function checkProximityForRecommendations(userLat, userLng) {
     // If user manually dismissed recs, don't auto-show again
     if (recsDismissedByUser) return;
 
-    const thresholdMiles = 0.5;
+    const thresholdMiles = 0.1;
 
     // Collect all candidates: [dist, lat, lng, title]
     const candidates = [];
