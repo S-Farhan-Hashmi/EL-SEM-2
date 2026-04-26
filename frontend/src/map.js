@@ -1,4 +1,4 @@
-import { fetchChargingStations, fetchRouteFromGraphHopper, fetchRestaurantRecommendations, analyzePeakHours, registerTimestampInMySQL } from './api.js';
+import { fetchChargingStations, fetchRouteFromGraphHopper, fetchRestaurantRecommendations, analyzePeakHours, registerTimestampInMySQL, fetchAllPeakHours } from './api.js';
 import { getDatabase } from './auth.js';
 
 // ========= MAP STATE =========
@@ -12,6 +12,11 @@ export let currentRoute = null;
 export let userLocationWatchId = null;
 let isFirstLocationFind = true;
 export let recommendedStations = new Set(); // Tracks stations we already requested KNN for
+
+// ========= PEAK HOUR BUBBLE STATE =========
+let peakHourBubbleLayer = null;
+let peakHourToggleEnabled = false;
+let peakHourToggleControl = null;
 
 // ========= UTILITY =========
 export function calculateDistanceMiles(lat1, lon1, lat2, lon2) {
@@ -89,6 +94,9 @@ export function initLeafletMap() {
     mapInitialized = true;
     statusMessage('Map view ready. Trying to locate you…', 'success');
     locateUser(defaultLocation);
+
+    // Add the peak-hour bubble toggle control
+    addPeakHourToggleControl();
 }
 
 // ========= GEOLOCATION =========
@@ -446,6 +454,8 @@ export function addStationMarkers(stations) {
                 const initialData = await analyzePeakHours(stationStrId);
                 if (initialData && initialData.peak_hours && initialData.peak_hours.length > 0) {
                     peakInfo.innerHTML = `Peak hours: <strong>${initialData.peak_hours.join(', ')}</strong>`;
+                } else if (initialData && initialData.total_entries !== undefined) {
+                    peakInfo.innerHTML = `<span style="color:#fbbf24;">📊 ${initialData.total_entries}/${initialData.min_required} entries — need ${initialData.min_required - initialData.total_entries} more to predict</span>`;
                 } else {
                     peakInfo.innerHTML = "No entries yet.";
                 }
@@ -460,6 +470,8 @@ export function addStationMarkers(stations) {
                         const updatedData = await analyzePeakHours(stationStrId);
                         if (updatedData && updatedData.peak_hours && updatedData.peak_hours.length > 0) {
                             peakInfo.innerHTML = `Peak hours: <strong>${updatedData.peak_hours.join(', ')}</strong>`;
+                        } else if (updatedData && updatedData.total_entries !== undefined) {
+                            peakInfo.innerHTML = `<span style="color:#fbbf24;">📊 ${updatedData.total_entries}/${updatedData.min_required} entries — need ${updatedData.min_required - updatedData.total_entries} more to predict</span>`;
                         } else {
                             peakInfo.innerHTML = "Error fetching updated data.";
                         }
@@ -745,6 +757,8 @@ export function createOrUpdateStationMarker(station, stationId, markerMap) {
             analyzePeakHours(stationId).then(initialData => {
                 if (initialData && initialData.peak_hours && initialData.peak_hours.length > 0) {
                     peakInfo.innerHTML = `Peak hours: <strong>${initialData.peak_hours.join(', ')}</strong>`;
+                } else if (initialData && initialData.total_entries !== undefined) {
+                    peakInfo.innerHTML = `<span style="color:#fbbf24;">📊 ${initialData.total_entries}/${initialData.min_required} entries — need ${initialData.min_required - initialData.total_entries} more to predict</span>`;
                 } else {
                     peakInfo.innerHTML = "No entries yet.";
                 }
@@ -758,8 +772,10 @@ export function createOrUpdateStationMarker(station, stationId, markerMap) {
                 const res = await registerTimestampInMySQL(stationId, nowISO);
                 if (res && res.success) {
                     const updatedData = await analyzePeakHours(stationId);
-                    if (updatedData && updatedData.peak_hours.length > 0) {
+                    if (updatedData && updatedData.peak_hours && updatedData.peak_hours.length > 0) {
                         peakInfo.innerHTML = `Peak hours: <strong>${updatedData.peak_hours.join(', ')}</strong>`;
+                    } else if (updatedData && updatedData.total_entries !== undefined) {
+                        peakInfo.innerHTML = `<span style="color:#fbbf24;">📊 ${updatedData.total_entries}/${updatedData.min_required} entries — need ${updatedData.min_required - updatedData.total_entries} more to predict</span>`;
                     } else {
                         peakInfo.innerHTML = "Error fetching updated data.";
                     }
@@ -1047,4 +1063,185 @@ export function setupLocationListener() {
             });
         })
         .catch(error => console.error('Error reading root for location:', error));
+}
+
+// ========= PEAK HOUR BUBBLE OVERLAY =========
+function addPeakHourToggleControl() {
+    if (peakHourToggleControl) return; // Already added
+
+    const PeakHourToggle = L.Control.extend({
+        options: { position: 'topright' },
+        onAdd: function () {
+            const container = L.DomUtil.create('div', 'peak-hour-toggle-control leaflet-bar');
+            container.innerHTML = `
+                <label class="peak-toggle-label" title="Show Peak Hour Prediction Bubbles">
+                    <input type="checkbox" id="peakHourToggle" />
+                    <span class="peak-toggle-slider"></span>
+                    <span class="peak-toggle-text">🕐 Peak Hours</span>
+                </label>
+            `;
+            L.DomEvent.disableClickPropagation(container);
+            L.DomEvent.disableScrollPropagation(container);
+
+            // Attach the event after a microtask so DOM is ready
+            setTimeout(() => {
+                const checkbox = document.getElementById('peakHourToggle');
+                if (checkbox) {
+                    checkbox.addEventListener('change', (e) => {
+                        peakHourToggleEnabled = e.target.checked;
+                        if (peakHourToggleEnabled) {
+                            refreshPeakHourBubbles();
+                        } else {
+                            clearPeakHourBubbles();
+                        }
+                    });
+                }
+            }, 0);
+
+            return container;
+        }
+    });
+
+    peakHourToggleControl = new PeakHourToggle();
+    map.addControl(peakHourToggleControl);
+}
+
+function clearPeakHourBubbles() {
+    if (peakHourBubbleLayer) {
+        map.removeLayer(peakHourBubbleLayer);
+        peakHourBubbleLayer = null;
+    }
+}
+
+function formatHour(h) {
+    if (h === 0) return '12 AM';
+    if (h === 12) return '12 PM';
+    return h < 12 ? `${h} AM` : `${h - 12} PM`;
+}
+
+async function refreshPeakHourBubbles() {
+    clearPeakHourBubbles();
+    if (!peakHourToggleEnabled) return;
+
+    const allData = await fetchAllPeakHours();
+    if (!allData || Object.keys(allData).length === 0) {
+        console.log('[PeakBubbles] No peak hour data available from backend.');
+        return;
+    }
+
+    peakHourBubbleLayer = L.layerGroup();
+
+    // Collect all station positions from Firebase markers + OCM markers
+    const stationPositions = {};
+
+    if (window.firebaseStationMarkerMap) {
+        for (const [id, marker] of Object.entries(window.firebaseStationMarkerMap)) {
+            const pos = marker.getLatLng();
+            stationPositions[id] = { lat: pos.lat, lng: pos.lng, title: marker.options.title || `Station ${id}` };
+        }
+    }
+
+    for (const marker of stationMarkers) {
+        const pos = marker.getLatLng();
+        const title = marker.options.title || 'Station';
+        // OCM station IDs in the timestamp DB use the format "ocm-<ID>"
+        const ocmId = `ocm-${title.replace(/\s+/g, '_')}`;
+        if (!stationPositions[ocmId]) {
+            stationPositions[ocmId] = { lat: pos.lat, lng: pos.lng, title };
+        }
+    }
+
+    // Match backend data to positions
+    for (const [stationId, data] of Object.entries(allData)) {
+        const pos = stationPositions[stationId];
+        if (!pos) {
+            console.log(`[PeakBubbles] No map position found for station: ${stationId}`);
+            continue;
+        }
+
+        const totalEntries = data.total_entries || 0;
+        const minRequired = data.min_required || 5;
+        const hasPeak = data.peak_hours && data.peak_hours.length > 0;
+
+        // Determine the current hour to check if it's a peak hour NOW
+        const currentHour = new Date().getHours();
+        const isCurrentlyPeak = hasPeak && data.peak_hours.includes(currentHour);
+
+        // Bubble radius scales with total entries, clamped to a reasonable range
+        const baseRadius = 18;
+        const scaledRadius = Math.min(baseRadius + totalEntries * 2, 50);
+
+        // Color: red if currently peak, amber if has prediction, grey if insufficient
+        let fillColor, borderColor, fillOpacity;
+        if (!hasPeak) {
+            // Insufficient data — grey
+            fillColor = '#6b7280';
+            borderColor = '#9ca3af';
+            fillOpacity = 0.35;
+        } else if (isCurrentlyPeak) {
+            // Currently in peak hour — red/hot
+            fillColor = '#ef4444';
+            borderColor = '#fca5a5';
+            fillOpacity = 0.6;
+        } else {
+            // Has prediction but not currently peak — amber
+            fillColor = '#f59e0b';
+            borderColor = '#fcd34d';
+            fillOpacity = 0.5;
+        }
+
+        const bubble = L.circleMarker([pos.lat, pos.lng], {
+            radius: scaledRadius,
+            fillColor: fillColor,
+            fillOpacity: fillOpacity,
+            color: borderColor,
+            weight: 2,
+            opacity: 0.8,
+            className: 'peak-bubble-marker'
+        });
+
+        // Build popup content
+        let popupContent;
+        if (hasPeak) {
+            const peakHoursFormatted = data.peak_hours.map(formatHour).join(', ');
+            const statusTag = isCurrentlyPeak
+                ? `<span style="color:#ef4444; font-weight:700;">🔴 PEAK NOW</span>`
+                : `<span style="color:#22c55e; font-weight:600;">🟢 Off-Peak</span>`;
+
+            popupContent = `
+                <div style="font-family: 'Inter', system-ui, sans-serif; min-width: 180px;">
+                    <div style="font-weight: 700; font-size: 0.9rem; margin-bottom: 0.3rem; color: #1f2937;">
+                        ${escapeHtml(pos.title)}
+                    </div>
+                    <div style="font-size: 0.8rem; margin-bottom: 0.4rem;">${statusTag}</div>
+                    <div style="font-size: 0.78rem; color: #4b5563;">
+                        <strong>Predicted Peak:</strong> ${peakHoursFormatted}
+                    </div>
+                    <div style="font-size: 0.75rem; color: #6b7280; margin-top: 0.2rem;">
+                        Based on <strong>${totalEntries}</strong> entries
+                    </div>
+                </div>
+            `;
+        } else {
+            popupContent = `
+                <div style="font-family: 'Inter', system-ui, sans-serif; min-width: 160px;">
+                    <div style="font-weight: 700; font-size: 0.9rem; margin-bottom: 0.3rem; color: #1f2937;">
+                        ${escapeHtml(pos.title)}
+                    </div>
+                    <div style="font-size: 0.78rem; color: #92400e;">
+                        📊 ${totalEntries}/${minRequired} entries
+                    </div>
+                    <div style="font-size: 0.75rem; color: #6b7280;">
+                        Need ${minRequired - totalEntries} more to predict peak hours
+                    </div>
+                </div>
+            `;
+        }
+
+        bubble.bindPopup(popupContent);
+        peakHourBubbleLayer.addLayer(bubble);
+    }
+
+    peakHourBubbleLayer.addTo(map);
+    console.log(`[PeakBubbles] Rendered ${Object.keys(allData).length} bubble(s) on map.`);
 }

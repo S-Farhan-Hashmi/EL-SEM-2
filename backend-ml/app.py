@@ -60,6 +60,8 @@ def register_timestamp():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+MIN_DATA_POINTS = 5  # Minimum timestamp entries required for peak hour prediction
+
 @app.route('/peak_hours', methods=['GET'])
 def peak_hours():
     try:
@@ -72,6 +74,24 @@ def peak_hours():
             return jsonify({"error": "Database connection failed"}), 500
             
         cursor = conn.cursor(dictionary=True)
+
+        # First check total number of entries for this station
+        count_query = "SELECT COUNT(*) as total FROM station_timestamps WHERE station_id = %s"
+        cursor.execute(count_query, (str(station_id),))
+        total_row = cursor.fetchone()
+        total_entries = total_row['total'] if total_row else 0
+
+        if total_entries < MIN_DATA_POINTS:
+            cursor.close()
+            conn.close()
+            return jsonify({
+                "peak_hours": [],
+                "distribution": {},
+                "total_entries": total_entries,
+                "min_required": MIN_DATA_POINTS,
+                "message": f"Need at least {MIN_DATA_POINTS} entries to predict peak hours. Currently have {total_entries}."
+            })
+
         # Query to count entries per hour for this station
         query = """
             SELECT HOUR(entry_time) as hour, COUNT(*) as count 
@@ -86,7 +106,7 @@ def peak_hours():
         conn.close()
         
         if not results:
-            return jsonify({"peak_hours": [], "distribution": {}})
+            return jsonify({"peak_hours": [], "distribution": {}, "total_entries": total_entries, "min_required": MIN_DATA_POINTS})
             
         max_count = results[0]['count']
         peak_hours_list = [row['hour'] for row in results if row['count'] == max_count]
@@ -95,8 +115,75 @@ def peak_hours():
         
         return jsonify({
             "peak_hours": peak_hours_list,
-            "distribution": distribution
+            "distribution": distribution,
+            "total_entries": total_entries,
+            "min_required": MIN_DATA_POINTS
         })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/all_peak_hours', methods=['GET'])
+def all_peak_hours():
+    """Returns peak hour data for ALL stations (used by the map bubble overlay)."""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+
+        cursor = conn.cursor(dictionary=True)
+
+        # Get entry counts per station
+        count_query = """
+            SELECT station_id, COUNT(*) as total
+            FROM station_timestamps
+            GROUP BY station_id
+        """
+        cursor.execute(count_query)
+        station_counts = {row['station_id']: row['total'] for row in cursor.fetchall()}
+
+        # Get hourly distribution per station
+        dist_query = """
+            SELECT station_id, HOUR(entry_time) as hour, COUNT(*) as count
+            FROM station_timestamps
+            GROUP BY station_id, hour
+            ORDER BY station_id, count DESC
+        """
+        cursor.execute(dist_query)
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        # Build per-station result
+        station_data = {}
+        for row in rows:
+            sid = row['station_id']
+            if sid not in station_data:
+                station_data[sid] = []
+            station_data[sid].append({'hour': row['hour'], 'count': row['count']})
+
+        result = {}
+        for sid, entries in station_data.items():
+            total = station_counts.get(sid, 0)
+            if total < MIN_DATA_POINTS:
+                result[sid] = {
+                    'peak_hours': [],
+                    'distribution': {},
+                    'total_entries': total,
+                    'min_required': MIN_DATA_POINTS,
+                    'message': f'Need at least {MIN_DATA_POINTS} entries. Currently have {total}.'
+                }
+            else:
+                max_count = entries[0]['count']
+                peak_list = [e['hour'] for e in entries if e['count'] == max_count]
+                dist = {e['hour']: e['count'] for e in entries}
+                result[sid] = {
+                    'peak_hours': peak_list,
+                    'distribution': dist,
+                    'total_entries': total,
+                    'min_required': MIN_DATA_POINTS
+                }
+
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

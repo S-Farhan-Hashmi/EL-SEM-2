@@ -278,6 +278,21 @@ export async function analyzePeakHours(stationId) {
     }
 }
 
+// ========= ALL PEAK HOURS (Bulk) =========
+export async function fetchAllPeakHours() {
+    try {
+        const response = await fetch('http://localhost:5000/all_peak_hours');
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        return data;
+    } catch (err) {
+        console.error('Failed to fetch all peak hours:', err);
+        return null;
+    }
+}
+
 export async function registerTimestampInMySQL(stationId, timestamp) {
     try {
         const response = await fetch(`http://localhost:5000/register_timestamp`, {

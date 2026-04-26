@@ -1137,3 +1137,97 @@ input:focus {
     height: 24px;
   }
 }
+
+/* ========= PEAK HOUR TOGGLE CONTROL ========= */
+.peak-hour-toggle-control {
+  background: rgba(10, 10, 14, 0.88) !important;
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 14px !important;
+  padding: 0.5rem 0.85rem;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+  transition: all 0.3s ease;
+}
+
+.peak-hour-toggle-control:hover {
+  border-color: rgba(245, 158, 11, 0.3) !important;
+  box-shadow: 0 8px 30px rgba(245, 158, 11, 0.15);
+}
+
+.peak-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  cursor: pointer;
+  user-select: none;
+  font-family: var(--font-family);
+}
+
+.peak-toggle-label input[type="checkbox"] {
+  display: none;
+}
+
+.peak-toggle-slider {
+  position: relative;
+  width: 38px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
+  transition: all 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  flex-shrink: 0;
+}
+
+.peak-toggle-slider::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  background: #6b7280;
+  border-radius: 50%;
+  transition: all 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+.peak-toggle-label input:checked + .peak-toggle-slider {
+  background: rgba(245, 158, 11, 0.25);
+  border-color: rgba(245, 158, 11, 0.4);
+}
+
+.peak-toggle-label input:checked + .peak-toggle-slider::after {
+  left: 20px;
+  background: #f59e0b;
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.5);
+}
+
+.peak-toggle-text {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+
+/* Peak Bubble Markers pulse animation */
+.peak-bubble-marker {
+  animation: peakBubblePulse 2.5s ease-in-out infinite;
+}
+
+@keyframes peakBubblePulse {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 0.55; }
+}
+
+/* Peak Hour Toggle on mobile */
+@media (max-width: 768px) {
+  .peak-hour-toggle-control {
+    border-radius: 10px !important;
+    padding: 0.4rem 0.65rem;
+  }
+  .peak-toggle-text {
+    font-size: 0.7rem;
+  }
+}
