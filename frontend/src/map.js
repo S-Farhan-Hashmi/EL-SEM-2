@@ -1227,8 +1227,9 @@ async function refreshPeakHourBubbles() {
         const isCurrentlyPeak = hasPeak && data.peak_hours.includes(currentHour);
 
         // Bubble radius scales with total entries, clamped to a reasonable range
-        const baseRadius = 18;
-        const scaledRadius = Math.min(baseRadius + totalEntries * 2, 50);
+        // Using fixed meters (L.circle) instead of pixels (L.circleMarker) so it scales down when zooming out
+        const baseRadiusMeters = 200;
+        const scaledRadiusMeters = Math.min(baseRadiusMeters + totalEntries * 25, 1200);
 
         // Color: red if currently peak, amber if has prediction, grey if insufficient
         let fillColor, borderColor, fillOpacity;
@@ -1249,8 +1250,8 @@ async function refreshPeakHourBubbles() {
             fillOpacity = 0.5;
         }
 
-        const bubble = L.circleMarker([pos.lat, pos.lng], {
-            radius: scaledRadius,
+        const bubble = L.circle([pos.lat, pos.lng], {
+            radius: scaledRadiusMeters,
             fillColor: fillColor,
             fillOpacity: fillOpacity,
             color: borderColor,
