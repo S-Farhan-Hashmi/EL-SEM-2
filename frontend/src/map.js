@@ -12,6 +12,7 @@ export let currentRoute = null;
 export let userLocationWatchId = null;
 let isFirstLocationFind = true;
 export let recommendedStations = new Set(); // Tracks stations we already requested KNN for
+let recsDismissedByUser = false; // When true, only show recommendations on manual click
 
 // ========= PEAK HOUR BUBBLE STATE =========
 let peakHourBubbleLayer = null;
@@ -259,8 +260,27 @@ function showRecommendations(recs, stationName) {
     area.classList.add('active');
 }
 
+// Called when user manually dismisses the recommendations panel
+export function dismissRecommendations() {
+    recsDismissedByUser = true;
+    const area = document.getElementById('recommendationsArea');
+    if (area) area.classList.remove('active');
+}
+
+// Called from station popup button — always shows recommendations regardless of dismiss state
+export async function showRecommendationsForStation(lat, lng, stationName) {
+    const recs = await fetchRestaurantRecommendations(lat, lng);
+    if (recs && recs.length > 0) {
+        recsDismissedByUser = false; // Reset since user is actively requesting
+        showRecommendations(recs, stationName);
+    }
+}
+
 async function checkProximityForRecommendations(userLat, userLng) {
-    const thresholdMiles = 0.1;
+    // If user manually dismissed recs, don't auto-show again
+    if (recsDismissedByUser) return;
+
+    const thresholdMiles = 0.5;
 
     // Collect all candidates: [dist, lat, lng, title]
     const candidates = [];
@@ -414,14 +434,22 @@ export function addStationMarkers(stations) {
         <div style="font-size: 0.82rem; color: #111827; margin-bottom: 0.35rem;">
           <strong>Usage cost:</strong> ${escapeHtml(usageCost)}
         </div>
-        <div style="margin-top: 0.5rem;">
+        <div style="margin-top: 0.5rem; display: flex; gap: 0.4rem;">
           <button id="routeBtn-${station.ID}" style="
             background: linear-gradient(135deg, #3b82f6, #10b981);
             color: #ffffff; border: none; border-radius: 6px;
             padding: 0.4rem 0.8rem; font-size: 0.8rem; font-weight: 600;
-            cursor: pointer; width: 100%; transition: filter 0.2s;
+            cursor: pointer; flex: 1; transition: filter 0.2s;
           " onmouseover="this.style.filter='brightness(1.1)'" onmouseout="this.style.filter='brightness(1)'">
-            🧭 Get Route
+            🧭 Route
+          </button>
+          <button id="recsBtn-ocm-${station.ID}" style="
+            background: linear-gradient(135deg, #f59e0b, #fb923c);
+            color: #ffffff; border: none; border-radius: 6px;
+            padding: 0.4rem 0.8rem; font-size: 0.8rem; font-weight: 600;
+            cursor: pointer; flex: 1; transition: filter 0.2s;
+          " onmouseover="this.style.filter='brightness(1.1)'" onmouseout="this.style.filter='brightness(1)'">
+            🍽️ Eateries
           </button>
         </div>
         <div id="routeInfo-${station.ID}" style="margin-top: 0.5rem; font-size: 0.75rem; color: #4b5563; display: none;"></div>
@@ -444,6 +472,17 @@ export function addStationMarkers(stations) {
             const routeBtn = document.getElementById(`routeBtn-${station.ID}`);
             if (routeBtn) {
                 routeBtn.addEventListener('click', () => calculateRouteToStation(station, marker));
+            }
+
+            const recsBtn = document.getElementById(`recsBtn-ocm-${station.ID}`);
+            if (recsBtn) {
+                recsBtn.addEventListener('click', () => {
+                    showRecommendationsForStation(
+                        station.AddressInfo.Latitude,
+                        station.AddressInfo.Longitude,
+                        station.AddressInfo.Title || 'Charging Station'
+                    );
+                });
             }
             
             const simBtn = document.getElementById(`simEntryBtn-ocm-${station.ID}`);
@@ -661,14 +700,22 @@ function createStationPopup(station, stationId) {
         </div>
         ${live.Distance != null ? `<div><strong>Sensor Distance:</strong> ${live.Distance} cm</div>` : ''}
       </div>
-      <div style="margin-top: 0.5rem;">
+      <div style="margin-top: 0.5rem; display: flex; gap: 0.4rem;">
         <button id="routeBtn-firebase-${stationId}" style="
           background: linear-gradient(135deg, #38bdf8, #22c55e);
           color: #0b1120; border: none; border-radius: 6px;
           padding: 0.4rem 0.8rem; font-size: 0.8rem; font-weight: 600;
-          cursor: pointer; width: 100%; transition: filter 0.2s;
+          cursor: pointer; flex: 1; transition: filter 0.2s;
         " onmouseover="this.style.filter='brightness(1.1)'" onmouseout="this.style.filter='brightness(1)'">
-          🧭 Get Route
+          🧭 Route
+        </button>
+        <button id="recsBtn-firebase-${stationId}" style="
+          background: linear-gradient(135deg, #f59e0b, #fb923c);
+          color: #ffffff; border: none; border-radius: 6px;
+          padding: 0.4rem 0.8rem; font-size: 0.8rem; font-weight: 600;
+          cursor: pointer; flex: 1; transition: filter 0.2s;
+        " onmouseover="this.style.filter='brightness(1.1)'" onmouseout="this.style.filter='brightness(1)'">
+          🍽️ Eateries
         </button>
       </div>
       <div id="routeInfo-firebase-${stationId}" style="margin-top: 0.5rem; font-size: 0.75rem; color: #4b5563; display: none;"></div>
@@ -747,6 +794,15 @@ export function createOrUpdateStationMarker(station, stationId, markerMap) {
         const routeBtn = document.getElementById(`routeBtn-firebase-${stationId}`);
         if (routeBtn) {
             routeBtn.addEventListener('click', () => calculateRouteToFirebaseStation(stationId, m));
+        }
+
+        const recsBtn = document.getElementById(`recsBtn-firebase-${stationId}`);
+        if (recsBtn) {
+            recsBtn.addEventListener('click', () => {
+                const pos = m.getLatLng();
+                const title = m.options.title || `Station ${stationId}`;
+                showRecommendationsForStation(pos.lat, pos.lng, title);
+            });
         }
 
         const simBtn = document.getElementById(`simEntryBtn-${stationId}`);

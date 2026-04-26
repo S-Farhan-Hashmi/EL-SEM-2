@@ -5,7 +5,8 @@ import {
     loadStationsFromFirebase,
     handleCalculate,
     drawRoute,
-    userMarker
+    userMarker,
+    dismissRecommendations
 } from './map.js';
 
 // ========= CHATBOT CLASS =========
@@ -432,8 +433,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const closeRecsBtn = document.getElementById('closeRecsBtn');
     if (closeRecsBtn) {
         closeRecsBtn.addEventListener('click', () => {
-            const area = document.getElementById('recommendationsArea');
-            if (area) area.classList.remove('active');
+            dismissRecommendations();
         });
     }
 
