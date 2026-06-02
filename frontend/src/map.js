@@ -380,7 +380,8 @@ export function addStationMarkers(stations) {
         if (Latitude == null || Longitude == null) return;
 
         const marker = L.marker([Latitude, Longitude], {
-            title: station.AddressInfo.Title || 'Charging Station'
+            title: station.AddressInfo.Title || 'Charging Station',
+            ocmId: `ocm-${station.ID}`
         }).addTo(map);
 
         const addressParts = [
@@ -1133,9 +1134,8 @@ async function refreshPeakHourBubbles() {
     for (const marker of stationMarkers) {
         const pos = marker.getLatLng();
         const title = marker.options.title || 'Station';
-        // OCM station IDs in the timestamp DB use the format "ocm-<ID>"
-        const ocmId = `ocm-${title.replace(/\s+/g, '_')}`;
-        if (!stationPositions[ocmId]) {
+        const ocmId = marker.options.ocmId;
+        if (ocmId && !stationPositions[ocmId]) {
             stationPositions[ocmId] = { lat: pos.lat, lng: pos.lng, title };
         }
     }
