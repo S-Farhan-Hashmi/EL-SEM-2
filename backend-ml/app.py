@@ -1,118 +1,196 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from inference import get_recommendations
-from collections import Counter
 from datetime import datetime
-import mysql.connector
+import os
 
-# MySQL configuration
-# UPDATE THESE TO MATCH YOUR LOCAL MYSQL CREDENTIALS
-DB_CONFIG = {
-    'host': 'localhost',
-    'user': 'root',
-    'password': 'Gourd@13',
-    'database': 'chargeflow'
-}
+# ── Database driver selection ─────────────────────────────────────────────────
+# On Render the free tier provides PostgreSQL (DATABASE_URL env var).
+# Locally we keep using MySQL via individual DB_* env vars / defaults.
+DATABASE_URL = os.environ.get('DATABASE_URL')  # set automatically by Render
 
-def get_db_connection():
-    try:
-        return mysql.connector.connect(**DB_CONFIG)
-    except mysql.connector.Error as err:
-        print(f"Error connecting to MySQL: {err}")
-        return None
+if DATABASE_URL:
+    # ── PostgreSQL (Render) ──────────────────────────────────────────────────
+    import psycopg2
+    import psycopg2.extras
 
+    def get_db_connection():
+        try:
+            # Render gives 'postgres://…'; psycopg2 needs 'postgresql://…'
+            url = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
+            return psycopg2.connect(url, cursor_factory=psycopg2.extras.RealDictCursor)
+        except Exception as err:
+            print(f"Error connecting to PostgreSQL: {err}")
+            return None
+
+    def init_db():
+        """Create table if it doesn't exist (runs once on startup)."""
+        conn = get_db_connection()
+        if not conn:
+            return
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS station_timestamps (
+                id         SERIAL PRIMARY KEY,
+                station_id VARCHAR(255) NOT NULL,
+                entry_time TIMESTAMP   NOT NULL
+            );
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("PostgreSQL: station_timestamps table ready.")
+
+    DB_BACKEND = 'postgres'
+
+else:
+    # ── MySQL (local dev) ────────────────────────────────────────────────────
+    import mysql.connector
+
+    DB_CONFIG = {
+        'host':     os.environ.get('DB_HOST',     'localhost'),
+        'user':     os.environ.get('DB_USER',     'root'),
+        'password': os.environ.get('DB_PASSWORD', 'Gourd@13'),
+        'database': os.environ.get('DB_NAME',     'chargeflow'),
+        'port':     int(os.environ.get('DB_PORT', 3306)),
+    }
+
+    def get_db_connection():
+        try:
+            return mysql.connector.connect(**DB_CONFIG)
+        except mysql.connector.Error as err:
+            print(f"Error connecting to MySQL: {err}")
+            return None
+
+    def init_db():
+        pass  # Table already exists locally
+
+    DB_BACKEND = 'mysql'
+
+# ── Flask app ─────────────────────────────────────────────────────────────────
 app = Flask(__name__)
-CORS(app) # Enable CORS for frontend
+CORS(app)
 
+# Initialise DB table on startup (needed for fresh Render PostgreSQL)
+init_db()
+
+# ── Helper: run a query and return rows as list-of-dicts ─────────────────────
+def db_fetchall(conn, query, params=()):
+    cur = conn.cursor()
+    cur.execute(query, params)
+    rows = cur.fetchall()
+    cur.close()
+    if DB_BACKEND == 'postgres':
+        return [dict(r) for r in rows]
+    else:
+        # mysql-connector with dictionary=True cursor already returns dicts,
+        # but get_db_connection doesn't set that — recreate with dict cursor
+        return rows
+
+def db_fetchone(conn, query, params=()):
+    cur = conn.cursor()
+    cur.execute(query, params)
+    row = cur.fetchone()
+    cur.close()
+    if DB_BACKEND == 'postgres':
+        return dict(row) if row else None
+    return row
+
+
+# ── Route: register timestamp ─────────────────────────────────────────────────
 @app.route('/register_timestamp', methods=['POST'])
 def register_timestamp():
     try:
         data = request.get_json()
         station_id = data.get('station_id')
         timestamp_str = data.get('timestamp')
-        
+
         if not station_id or not timestamp_str:
             return jsonify({"error": "Missing station_id or timestamp"}), 400
-            
-        # Parse ISO string and convert UTC to local time
+
         if timestamp_str.endswith('Z'):
             timestamp_str = timestamp_str.replace('Z', '+00:00')
         dt = datetime.fromisoformat(timestamp_str)
-        
-        # If the datetime has timezone info (like UTC), convert it to local system time
         if dt.tzinfo is not None:
             dt = dt.astimezone()
-            
         mysql_datetime = dt.strftime('%Y-%m-%d %H:%M:%S')
 
         conn = get_db_connection()
         if not conn:
             return jsonify({"error": "Database connection failed"}), 500
-            
-        cursor = conn.cursor()
-        query = "INSERT INTO station_timestamps (station_id, entry_time) VALUES (%s, %s)"
-        cursor.execute(query, (str(station_id), mysql_datetime))
+
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO station_timestamps (station_id, entry_time) VALUES (%s, %s)",
+            (str(station_id), mysql_datetime)
+        )
         conn.commit()
-        cursor.close()
+        cur.close()
         conn.close()
-        
+
         return jsonify({"success": True, "message": "Timestamp registered successfully"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-MIN_DATA_POINTS = 5  # Minimum timestamp entries required for peak hour prediction
 
+MIN_DATA_POINTS = 5
+
+
+# ── Route: peak hours for one station ────────────────────────────────────────
 @app.route('/peak_hours', methods=['GET'])
 def peak_hours():
     try:
         station_id = request.args.get('station_id')
         if not station_id:
             return jsonify({"error": "Missing station_id"}), 400
-            
+
         conn = get_db_connection()
         if not conn:
             return jsonify({"error": "Database connection failed"}), 500
-            
-        cursor = conn.cursor(dictionary=True)
 
-        # First check total number of entries for this station
-        count_query = "SELECT COUNT(*) as total FROM station_timestamps WHERE station_id = %s"
-        cursor.execute(count_query, (str(station_id),))
-        total_row = cursor.fetchone()
-        total_entries = total_row['total'] if total_row else 0
+        cur = conn.cursor()
+
+        # Total count
+        cur.execute("SELECT COUNT(*) as total FROM station_timestamps WHERE station_id = %s", (str(station_id),))
+        row = cur.fetchone()
+        total_entries = (dict(row) if DB_BACKEND == 'postgres' else row)
+        total_entries = total_entries['total'] if total_entries else 0
 
         if total_entries < MIN_DATA_POINTS:
-            cursor.close()
+            cur.close()
             conn.close()
             return jsonify({
                 "peak_hours": [],
                 "distribution": {},
                 "total_entries": total_entries,
                 "min_required": MIN_DATA_POINTS,
-                "message": f"Need at least {MIN_DATA_POINTS} entries to predict peak hours. Currently have {total_entries}."
+                "message": f"Need at least {MIN_DATA_POINTS} entries. Currently have {total_entries}."
             })
 
-        # Query to count entries per hour for this station
-        query = """
-            SELECT HOUR(entry_time) as hour, COUNT(*) as count 
-            FROM station_timestamps 
-            WHERE station_id = %s 
-            GROUP BY hour 
+        # Hourly distribution
+        if DB_BACKEND == 'postgres':
+            hour_fn = "EXTRACT(HOUR FROM entry_time)::int"
+        else:
+            hour_fn = "HOUR(entry_time)"
+
+        cur.execute(f"""
+            SELECT {hour_fn} as hour, COUNT(*) as count
+            FROM station_timestamps
+            WHERE station_id = %s
+            GROUP BY hour
             ORDER BY count DESC
-        """
-        cursor.execute(query, (str(station_id),))
-        results = cursor.fetchall()
-        cursor.close()
+        """, (str(station_id),))
+        results = [dict(r) for r in cur.fetchall()] if DB_BACKEND == 'postgres' else cur.fetchall()
+        cur.close()
         conn.close()
-        
+
         if not results:
             return jsonify({"peak_hours": [], "distribution": {}, "total_entries": total_entries, "min_required": MIN_DATA_POINTS})
-            
+
         max_count = results[0]['count']
-        peak_hours_list = [row['hour'] for row in results if row['count'] == max_count]
-        
-        distribution = {row['hour']: row['count'] for row in results}
-        
+        peak_hours_list = [r['hour'] for r in results if r['count'] == max_count]
+        distribution = {r['hour']: r['count'] for r in results}
+
         return jsonify({
             "peak_hours": peak_hours_list,
             "distribution": distribution,
@@ -122,54 +200,56 @@ def peak_hours():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# ── Route: all peak hours (bubble overlay) ───────────────────────────────────
 @app.route('/all_peak_hours', methods=['GET'])
 def all_peak_hours():
-    """Returns peak hour data for ALL stations (used by the map bubble overlay)."""
     try:
         conn = get_db_connection()
         if not conn:
             return jsonify({"error": "Database connection failed"}), 500
 
-        cursor = conn.cursor(dictionary=True)
+        cur = conn.cursor()
 
-        # Get entry counts per station
-        count_query = """
+        cur.execute("""
             SELECT station_id, COUNT(*) as total
             FROM station_timestamps
             GROUP BY station_id
-        """
-        cursor.execute(count_query)
-        station_counts = {row['station_id']: row['total'] for row in cursor.fetchall()}
+        """)
+        station_counts = {}
+        for r in cur.fetchall():
+            rd = dict(r) if DB_BACKEND == 'postgres' else {'station_id': r[0], 'total': r[1]}
+            station_counts[rd['station_id']] = rd['total']
 
-        # Get hourly distribution per station
-        dist_query = """
-            SELECT station_id, HOUR(entry_time) as hour, COUNT(*) as count
+        if DB_BACKEND == 'postgres':
+            hour_fn = "EXTRACT(HOUR FROM entry_time)::int"
+        else:
+            hour_fn = "HOUR(entry_time)"
+
+        cur.execute(f"""
+            SELECT station_id, {hour_fn} as hour, COUNT(*) as count
             FROM station_timestamps
             GROUP BY station_id, hour
             ORDER BY station_id, count DESC
-        """
-        cursor.execute(dist_query)
-        rows = cursor.fetchall()
-        cursor.close()
+        """)
+        rows = [dict(r) for r in cur.fetchall()] if DB_BACKEND == 'postgres' else cur.fetchall()
+        cur.close()
         conn.close()
 
-        # Build per-station result
         station_data = {}
-        for row in rows:
-            sid = row['station_id']
+        for r in rows:
+            sid = r['station_id']
             if sid not in station_data:
                 station_data[sid] = []
-            station_data[sid].append({'hour': row['hour'], 'count': row['count']})
+            station_data[sid].append({'hour': r['hour'], 'count': r['count']})
 
         result = {}
         for sid, entries in station_data.items():
             total = station_counts.get(sid, 0)
             if total < MIN_DATA_POINTS:
                 result[sid] = {
-                    'peak_hours': [],
-                    'distribution': {},
-                    'total_entries': total,
-                    'min_required': MIN_DATA_POINTS,
+                    'peak_hours': [], 'distribution': {},
+                    'total_entries': total, 'min_required': MIN_DATA_POINTS,
                     'message': f'Need at least {MIN_DATA_POINTS} entries. Currently have {total}.'
                 }
             else:
@@ -177,16 +257,16 @@ def all_peak_hours():
                 peak_list = [e['hour'] for e in entries if e['count'] == max_count]
                 dist = {e['hour']: e['count'] for e in entries}
                 result[sid] = {
-                    'peak_hours': peak_list,
-                    'distribution': dist,
-                    'total_entries': total,
-                    'min_required': MIN_DATA_POINTS
+                    'peak_hours': peak_list, 'distribution': dist,
+                    'total_entries': total, 'min_required': MIN_DATA_POINTS
                 }
 
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# ── Route: restaurant recommendations ────────────────────────────────────────
 @app.route('/recommend', methods=['GET'])
 def recommend():
     try:
@@ -198,6 +278,6 @@ def recommend():
     recs = get_recommendations(lat, lng)
     return jsonify(recs)
 
+
 if __name__ == '__main__':
-    # Run the server on port 5000
     app.run(host='0.0.0.0', port=5000, debug=True)

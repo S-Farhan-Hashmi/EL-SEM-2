@@ -2,6 +2,11 @@
 export const OCM_API_KEY = '485c6801-fc29-4323-b54f-7b979346cfa6';
 export const GRAPHHOPPER_API_KEY = 'd0b14953-96df-4e6d-ae75-e6e4fc511a59';
 
+// Backend URL: set window.CHARGEFLOW_BACKEND in index.html to your Render URL.
+// Falls back to localhost:5000 for local development (start.bat).
+const BACKEND_URL = (window.CHARGEFLOW_BACKEND || 'http://localhost:5000').replace(/\/$/, '');
+
+
 const CORS_PROXIES = [
     'https://api.allorigins.win/raw?url=',
     'https://api.allorigins.win/get?url=',
@@ -235,7 +240,7 @@ function knnRecommend(restaurants, queryLat, queryLng, topN = 5) {
 export async function fetchRestaurantRecommendations(lat, lng) {
     // Try Flask backend first
     try {
-        const response = await fetch(`http://localhost:5000/recommend?lat=${lat}&lng=${lng}`);
+        const response = await fetch(`${BACKEND_URL}/recommend?lat=${lat}&lng=${lng}`);
         if (response.ok) {
             const data = await response.json();
             if (data && data.length > 0) {
@@ -266,7 +271,7 @@ export async function fetchRestaurantRecommendations(lat, lng) {
 // ========= PEAK HOURS ANALYSIS =========
 export async function analyzePeakHours(stationId) {
     try {
-        const response = await fetch(`http://localhost:5000/peak_hours?station_id=${encodeURIComponent(stationId)}`);
+        const response = await fetch(`${BACKEND_URL}/peak_hours?station_id=${encodeURIComponent(stationId)}`);
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -281,7 +286,7 @@ export async function analyzePeakHours(stationId) {
 // ========= ALL PEAK HOURS (Bulk) =========
 export async function fetchAllPeakHours() {
     try {
-        const response = await fetch('http://localhost:5000/all_peak_hours');
+        const response = await fetch(`${BACKEND_URL}/all_peak_hours`);
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -295,7 +300,7 @@ export async function fetchAllPeakHours() {
 
 export async function registerTimestampInMySQL(stationId, timestamp) {
     try {
-        const response = await fetch(`http://localhost:5000/register_timestamp`, {
+        const response = await fetch(`${BACKEND_URL}/register_timestamp`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'

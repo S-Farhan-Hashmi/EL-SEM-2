@@ -1,0 +1,37 @@
+services:
+  # Flask Web Service
+  - type: web
+    name: chargeflow-backend
+    runtime: python
+    rootDir: backend-ml
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    envVars:
+      - key: DB_HOST
+        fromDatabase:
+          name: chargeflow-db
+          property: host
+      - key: DB_USER
+        fromDatabase:
+          name: chargeflow-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: chargeflow-db
+          property: password
+      - key: DB_NAME
+        fromDatabase:
+          name: chargeflow-db
+          property: database
+      - key: DB_PORT
+        fromDatabase:
+          name: chargeflow-db
+          property: port
+
+databases:
+  # Free MySQL-compatible PostgreSQL instance on Render
+  # NOTE: Render's free DB is PostgreSQL — see setup_db_postgres.sql for schema
+  - name: chargeflow-db
+    databaseName: chargeflow
+    user: chargeflow_user
+    plan: free
