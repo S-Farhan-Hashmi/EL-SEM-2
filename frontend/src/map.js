@@ -380,9 +380,10 @@ export function addStationMarkers(stations) {
         if (Latitude == null || Longitude == null) return;
 
         const marker = L.marker([Latitude, Longitude], {
-            title: station.AddressInfo.Title || 'Charging Station',
-            ocmId: `ocm-${station.ID}`
+            title: station.AddressInfo.Title || 'Charging Station'
         }).addTo(map);
+        // Store the OCM ID directly on the marker object for peak-hour bubble lookup
+        marker._ocmId = `ocm-${station.ID}`;
 
         const addressParts = [
             station.AddressInfo.AddressLine1,
@@ -587,6 +588,11 @@ export async function handleCalculate() {
         if (userMarker) {
             const pos = userMarker.getLatLng();
             checkProximityForRecommendations(pos.lat, pos.lng);
+        }
+
+        // If peak hour toggle is on, refresh bubbles now that OCM markers are loaded
+        if (peakHourToggleEnabled) {
+            refreshPeakHourBubbles();
         }
 
         if (stations.length > 0) {
@@ -1134,7 +1140,7 @@ async function refreshPeakHourBubbles() {
     for (const marker of stationMarkers) {
         const pos = marker.getLatLng();
         const title = marker.options.title || 'Station';
-        const ocmId = marker.options.ocmId;
+        const ocmId = marker._ocmId;  // stored directly on marker object
         if (ocmId && !stationPositions[ocmId]) {
             stationPositions[ocmId] = { lat: pos.lat, lng: pos.lng, title };
         }
