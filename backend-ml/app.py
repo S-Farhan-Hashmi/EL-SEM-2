@@ -238,7 +238,10 @@ def all_peak_hours():
             GROUP BY station_id, hour
             ORDER BY station_id, count DESC
         """)
-        rows = [dict(r) for r in cur.fetchall()] if DB_BACKEND == 'postgres' else cur.fetchall()
+        if DB_BACKEND == 'postgres':
+            rows = [dict(r) for r in cur.fetchall()]
+        else:
+            rows = [{'station_id': r[0], 'hour': r[1], 'count': r[2]} for r in cur.fetchall()]
         cur.close()
         conn.close()
 
