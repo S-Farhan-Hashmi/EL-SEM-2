@@ -310,19 +310,8 @@ async function checkProximityForRecommendations(userLat, userLng) {
         }
     }
 
-    // If all nearby stations were already in the set but we still have candidates,
-    // force-show recommendations for the closest one (ensures at least 1 recommendation)
-    if (candidates.length > 0) {
-        const closest = candidates[0];
-        console.log(`[Proximity] Force-fetching recommendations for closest: "${closest.title}"`);
-        const recs = await fetchRestaurantRecommendations(closest.lat, closest.lng);
-        console.log(`[Proximity] Force-fetch API response:`, recs);
-        if (recs && recs.length > 0) {
-            showRecommendations(recs, closest.title);
-        } else {
-            console.warn('[Proximity] Backend returned no recommendations. Is the Flask server running on localhost:5000?');
-        }
-    }
+    // If all nearby stations were already in the set, we do nothing.
+    // The user has already seen the recommendations for these stations.
 }
 
 // ========= RANGE CIRCLE =========
