@@ -153,8 +153,10 @@ def peak_hours():
         # Total count
         cur.execute("SELECT COUNT(*) as total FROM station_timestamps WHERE station_id = %s", (str(station_id),))
         row = cur.fetchone()
-        total_entries = (dict(row) if DB_BACKEND == 'postgres' else row)
-        total_entries = total_entries['total'] if total_entries else 0
+        if DB_BACKEND == 'postgres':
+            total_entries = dict(row)['total'] if row else 0
+        else:
+            total_entries = row[0] if row else 0
 
         if total_entries < MIN_DATA_POINTS:
             cur.close()
@@ -180,7 +182,11 @@ def peak_hours():
             GROUP BY hour
             ORDER BY count DESC
         """, (str(station_id),))
-        results = [dict(r) for r in cur.fetchall()] if DB_BACKEND == 'postgres' else cur.fetchall()
+        if DB_BACKEND == 'postgres':
+            results = [dict(r) for r in cur.fetchall()]
+        else:
+            results = [{'hour': r[0], 'count': r[1]} for r in cur.fetchall()]
+            
         cur.close()
         conn.close()
 
