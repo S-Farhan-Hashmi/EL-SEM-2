@@ -1070,7 +1070,7 @@ function addPeakHourToggleControl() {
     if (peakHourToggleControl) return; // Already added
 
     const PeakHourToggle = L.Control.extend({
-        options: { position: 'topright' },
+        options: { position: 'topleft' },
         onAdd: function () {
             const container = L.DomUtil.create('div', 'peak-hour-toggle-control leaflet-bar');
             container.innerHTML = `

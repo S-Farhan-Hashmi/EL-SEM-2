@@ -1139,6 +1139,13 @@ input:focus {
 }
 
 /* ========= PEAK HOUR TOGGLE CONTROL ========= */
+
+/* Push the top-left Leaflet controls past the Charge Flow sidebar */
+.leaflet-top.leaflet-left {
+  left: 410px !important; /* 400px sidebar + 10px gap */
+  top: 12px;
+}
+
 .peak-hour-toggle-control {
   background: rgba(10, 10, 14, 0.88) !important;
   backdrop-filter: blur(20px) saturate(180%);
@@ -1223,6 +1230,10 @@ input:focus {
 
 /* Peak Hour Toggle on mobile */
 @media (max-width: 768px) {
+  .leaflet-top.leaflet-left {
+    left: 10px !important;
+    top: 10px;
+  }
   .peak-hour-toggle-control {
     border-radius: 10px !important;
     padding: 0.4rem 0.65rem;
