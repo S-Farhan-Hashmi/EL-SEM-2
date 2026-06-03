@@ -31,25 +31,10 @@ export function calculateDistanceMiles(lat1, lon1, lat2, lon2) {
     return R * c; 
 }
 
-// ========= RANDOM SIMULATION TIMESTAMP =========
-// Generates a random timestamp biased toward realistic EV charging hours.
-// Each station will develop its own unique peak pattern over multiple clicks.
+// ========= REAL SIMULATION TIMESTAMP =========
+// Returns the actual current time for the simulated entry.
 function randomSimulatedTimestamp() {
-    // Weighted hours: more weight on typical EV charging times
-    // Morning commute: 7-9, Midday: 12-13, Evening commute: 17-21
-    const weightedHours = [
-        7, 7, 7, 8, 8, 8, 8, 9, 9,           // morning commute
-        12, 13,                               // midday
-        17, 17, 18, 18, 18, 19, 19, 20, 20, 21, 21 // evening peak
-    ];
-    const hour = weightedHours[Math.floor(Math.random() * weightedHours.length)];
-    const minute = Math.floor(Math.random() * 60);
-    // Random day within the past 7 days
-    const daysAgo = Math.floor(Math.random() * 7);
-    const d = new Date();
-    d.setDate(d.getDate() - daysAgo);
-    d.setHours(hour, minute, 0, 0);
-    return d.toISOString();
+    return new Date().toISOString();
 }
 
 export function escapeHtml(str) {
@@ -1182,6 +1167,11 @@ async function refreshPeakHourBubbles() {
         // Determine the current hour to check if it's a peak hour NOW
         const currentHour = new Date().getHours();
         const isCurrentlyPeak = hasPeak && data.peak_hours.includes(currentHour);
+
+        // Only show the circle if it's currently a peak hour
+        if (!isCurrentlyPeak) {
+            continue;
+        }
 
         // Bubble radius scales with total entries, clamped to a reasonable range
         const baseRadius = 18;
