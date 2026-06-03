@@ -1,4 +1,4 @@
-import { fetchChargingStations, fetchRouteFromGraphHopper, fetchRestaurantRecommendations, analyzePeakHours, registerTimestampInMySQL, fetchAllPeakHours } from './api.js';
+import { fetchChargingStations, fetchRouteFromGraphHopper, fetchRestaurantRecommendations, analyzePeakHours, registerTimestampInMySQL, fetchAllPeakHours, clearStationTimestamps } from './api.js';
 import { getDatabase } from './auth.js';
 
 // ========= MAP STATE =========
@@ -430,6 +430,12 @@ export function addStationMarkers(stations) {
           " onmouseover="this.style.background='#4338ca'" onmouseout="this.style.background='#4f46e5'">
             🚗 Simulate Entry (Now)
           </button>
+          <button id="clearBtn-ocm-${station.ID}" style="
+            background: #6b7280; color: white; border: none; border-radius: 4px;
+            padding: 0.2rem 0.6rem; font-size: 0.7rem; cursor: pointer; width: 100%; margin-bottom: 0.3rem; transition: background 0.2s;
+          " onmouseover="this.style.background='#ef4444'" onmouseout="this.style.background='#6b7280'">
+            🗑️ Clear Data
+          </button>
           <div id="peakInfo-ocm-${station.ID}" style="font-size: 0.75rem; color: #4b5563; min-height: 1.2rem;">Click to register timestamp.</div>
         </div>
       </div>
@@ -444,40 +450,53 @@ export function addStationMarkers(stations) {
             }
             
             const simBtn = document.getElementById(`simEntryBtn-ocm-${station.ID}`);
+            const clearBtn = document.getElementById(`clearBtn-ocm-${station.ID}`);
             const peakInfo = document.getElementById(`peakInfo-ocm-${station.ID}`);
-            if (simBtn && peakInfo) {
+            const stationStrId = `ocm-${station.ID}`;
+
+            const refreshPeakInfo = async () => {
                 peakInfo.innerHTML = "Loading...";
-                const stationStrId = `ocm-${station.ID}`;
-                const initialData = await analyzePeakHours(stationStrId);
-                if (initialData && initialData.peak_hours && initialData.peak_hours.length > 0) {
-                    peakInfo.innerHTML = `Peak hours: <strong>${initialData.peak_hours.join(', ')}</strong>`;
-                } else if (initialData && initialData.total_entries !== undefined) {
-                    peakInfo.innerHTML = `<span style="color:#fbbf24;">📊 ${initialData.total_entries}/${initialData.min_required} entries — need ${initialData.min_required - initialData.total_entries} more to predict</span>`;
+                const data = await analyzePeakHours(stationStrId);
+                if (data && data.peak_hours && data.peak_hours.length > 0) {
+                    peakInfo.innerHTML = `Peak hours: <strong>${data.peak_hours.map(h => h + ':00').join(', ')}</strong>`;
+                } else if (data && data.total_entries !== undefined) {
+                    peakInfo.innerHTML = `<span style="color:#fbbf24;">📊 ${data.total_entries}/${data.min_required} entries — need ${data.min_required - data.total_entries} more to predict</span>`;
                 } else {
                     peakInfo.innerHTML = "No entries yet.";
                 }
+            };
+
+            if (simBtn && peakInfo) {
+                await refreshPeakInfo();
 
                 simBtn.addEventListener('click', async () => {
                     const simISO = randomSimulatedTimestamp();
                     simBtn.disabled = true;
                     simBtn.innerText = "Registering...";
-                    
                     const res = await registerTimestampInMySQL(stationStrId, simISO);
                     if (res && res.success) {
-                        const updatedData = await analyzePeakHours(stationStrId);
-                        if (updatedData && updatedData.peak_hours && updatedData.peak_hours.length > 0) {
-                            peakInfo.innerHTML = `Peak hours: <strong>${updatedData.peak_hours.join(', ')}</strong>`;
-                        } else if (updatedData && updatedData.total_entries !== undefined) {
-                            peakInfo.innerHTML = `<span style="color:#fbbf24;">📊 ${updatedData.total_entries}/${updatedData.min_required} entries — need ${updatedData.min_required - updatedData.total_entries} more to predict</span>`;
-                        } else {
-                            peakInfo.innerHTML = "Error fetching updated data.";
-                        }
+                        await refreshPeakInfo();
                     } else {
                         peakInfo.innerHTML = "<span style='color:red;'>Failed to register</span>";
                     }
-                    
                     simBtn.disabled = false;
                     simBtn.innerText = "🚗 Simulate Entry (Now)";
+                });
+            }
+
+            if (clearBtn && peakInfo) {
+                clearBtn.addEventListener('click', async () => {
+                    if (!confirm(`Clear all peak hour data for this station?`)) return;
+                    clearBtn.disabled = true;
+                    clearBtn.innerText = "Clearing...";
+                    const res = await clearStationTimestamps(stationStrId);
+                    if (res && res.success) {
+                        peakInfo.innerHTML = `<span style="color:#22c55e;">✓ Cleared ${res.deleted} entries. Click simulate to start fresh.</span>`;
+                    } else {
+                        peakInfo.innerHTML = "<span style='color:red;'>Failed to clear</span>";
+                    }
+                    clearBtn.disabled = false;
+                    clearBtn.innerText = "🗑️ Clear Data";
                 });
             }
         });
@@ -682,6 +701,12 @@ function createStationPopup(station, stationId) {
         " onmouseover="this.style.background='#4338ca'" onmouseout="this.style.background='#4f46e5'">
           🚗 Simulate Entry (Now)
         </button>
+        <button id="clearBtn-${stationId}" style="
+          background: #6b7280; color: white; border: none; border-radius: 4px;
+          padding: 0.2rem 0.6rem; font-size: 0.7rem; cursor: pointer; width: 100%; margin-bottom: 0.3rem; transition: background 0.2s;
+        " onmouseover="this.style.background='#ef4444'" onmouseout="this.style.background='#6b7280'">
+          🗑️ Clear Data
+        </button>
         <div id="peakInfo-${stationId}" style="font-size: 0.75rem; color: #4b5563; min-height: 1.2rem;">Click to register timestamp.</div>
       </div>
     </div>
@@ -752,41 +777,52 @@ export function createOrUpdateStationMarker(station, stationId, markerMap) {
         }
 
         const simBtn = document.getElementById(`simEntryBtn-${stationId}`);
+        const clearBtn = document.getElementById(`clearBtn-${stationId}`);
         const peakInfo = document.getElementById(`peakInfo-${stationId}`);
-        if (simBtn && peakInfo) {
-            // Fetch initial peak hours
+
+        const refreshPeakInfo = async () => {
             peakInfo.innerHTML = "Loading...";
-            analyzePeakHours(stationId).then(initialData => {
-                if (initialData && initialData.peak_hours && initialData.peak_hours.length > 0) {
-                    peakInfo.innerHTML = `Peak hours: <strong>${initialData.peak_hours.join(', ')}</strong>`;
-                } else if (initialData && initialData.total_entries !== undefined) {
-                    peakInfo.innerHTML = `<span style="color:#fbbf24;">📊 ${initialData.total_entries}/${initialData.min_required} entries — need ${initialData.min_required - initialData.total_entries} more to predict</span>`;
-                } else {
-                    peakInfo.innerHTML = "No entries yet.";
-                }
-            });
+            const data = await analyzePeakHours(stationId);
+            if (data && data.peak_hours && data.peak_hours.length > 0) {
+                peakInfo.innerHTML = `Peak hours: <strong>${data.peak_hours.map(h => h + ':00').join(', ')}</strong>`;
+            } else if (data && data.total_entries !== undefined) {
+                peakInfo.innerHTML = `<span style="color:#fbbf24;">📊 ${data.total_entries}/${data.min_required} entries — need ${data.min_required - data.total_entries} more to predict</span>`;
+            } else {
+                peakInfo.innerHTML = "No entries yet.";
+            }
+        };
+
+        if (simBtn && peakInfo) {
+            refreshPeakInfo();
 
             simBtn.addEventListener('click', async () => {
                 const simISO = randomSimulatedTimestamp();
                 simBtn.disabled = true;
                 simBtn.innerText = "Registering...";
-
                 const res = await registerTimestampInMySQL(stationId, simISO);
                 if (res && res.success) {
-                    const updatedData = await analyzePeakHours(stationId);
-                    if (updatedData && updatedData.peak_hours && updatedData.peak_hours.length > 0) {
-                        peakInfo.innerHTML = `Peak hours: <strong>${updatedData.peak_hours.join(', ')}</strong>`;
-                    } else if (updatedData && updatedData.total_entries !== undefined) {
-                        peakInfo.innerHTML = `<span style="color:#fbbf24;">📊 ${updatedData.total_entries}/${updatedData.min_required} entries — need ${updatedData.min_required - updatedData.total_entries} more to predict</span>`;
-                    } else {
-                        peakInfo.innerHTML = "Error fetching updated data.";
-                    }
+                    await refreshPeakInfo();
                 } else {
                     peakInfo.innerHTML = "<span style='color:red;'>Failed to register</span>";
                 }
-
                 simBtn.disabled = false;
                 simBtn.innerText = "🚗 Simulate Entry (Now)";
+            });
+        }
+
+        if (clearBtn && peakInfo) {
+            clearBtn.addEventListener('click', async () => {
+                if (!confirm(`Clear all peak hour data for this station?`)) return;
+                clearBtn.disabled = true;
+                clearBtn.innerText = "Clearing...";
+                const res = await clearStationTimestamps(stationId);
+                if (res && res.success) {
+                    peakInfo.innerHTML = `<span style="color:#22c55e;">✓ Cleared ${res.deleted} entries. Click simulate to start fresh.</span>`;
+                } else {
+                    peakInfo.innerHTML = "<span style='color:red;'>Failed to clear</span>";
+                }
+                clearBtn.disabled = false;
+                clearBtn.innerText = "🗑️ Clear Data";
             });
         }
     };

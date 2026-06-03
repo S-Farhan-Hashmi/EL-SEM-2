@@ -133,6 +133,30 @@ def register_timestamp():
         return jsonify({"error": str(e)}), 500
 
 
+# ── Route: clear timestamps for a station ────────────────────────────────────
+@app.route('/clear_timestamps', methods=['DELETE'])
+def clear_timestamps():
+    try:
+        station_id = request.args.get('station_id')
+        if not station_id:
+            return jsonify({"error": "Missing station_id"}), 400
+
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+
+        cur = conn.cursor()
+        cur.execute("DELETE FROM station_timestamps WHERE station_id = %s", (str(station_id),))
+        deleted = cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return jsonify({"success": True, "deleted": deleted, "message": f"Cleared {deleted} entries for station {station_id}"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 MIN_DATA_POINTS = 5
 
 

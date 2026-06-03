@@ -317,3 +317,19 @@ export async function registerTimestampInMySQL(stationId, timestamp) {
         return null;
     }
 }
+
+export async function clearStationTimestamps(stationId) {
+    try {
+        const response = await fetch(`${BACKEND_URL}/clear_timestamps?station_id=${encodeURIComponent(stationId)}`, {
+            method: 'DELETE'
+        });
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        return data;
+    } catch (err) {
+        console.error('Failed to clear timestamps:', err);
+        return null;
+    }
+}
