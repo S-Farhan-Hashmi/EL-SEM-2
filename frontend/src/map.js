@@ -32,9 +32,14 @@ export function calculateDistanceMiles(lat1, lon1, lat2, lon2) {
 }
 
 // ========= REAL SIMULATION TIMESTAMP =========
-// Returns the actual current time for the simulated entry.
+// Returns the LOCAL current time (no UTC conversion) so the stored hour
+// matches the user's clock (e.g. 21:38 IST is stored as 21, not 16).
 function randomSimulatedTimestamp() {
-    return new Date().toISOString();
+    const now = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    // Format as YYYY-MM-DDTHH:MM:SS with NO timezone suffix.
+    // The backend receives a naive datetime and stores the hour as-is.
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
 }
 
 export function escapeHtml(str) {
